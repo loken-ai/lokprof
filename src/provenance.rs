@@ -7,12 +7,13 @@
 //! Everything here is read, never asked of a person. A field a human types is a field that is
 //! right on the day somebody cares and wrong every day after.
 //!
-//! What is deliberately absent: any identifier that links two runs to the same person. The
-//! machine is described by what it is, not by who owns it - no hostname, no machine id. If
-//! submissions from outside ever need to be grouped, that decision is made once, out loud, and
-//! carried by a field added then.
+//! What is deliberately absent: the hostname, and any identifier that names a person. Two
+//! identifiers exist and both are one-way hashes: `host_id` groups the runs of one machine
+//! across card swaps, `hardware_id` names a configuration and is shared by every machine built
+//! the same way. Neither can be turned back into a name or a serial number.
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 /// The shape of the record. Bumped when a rule changes what a number means, never for a new
 /// field: a reader compares majors and refuses across them.
@@ -21,6 +22,14 @@ pub const SCHEMA: &str = "assay/2";
 /// The machine, as it describes itself.
 #[derive(Debug, Serialize)]
 pub struct Machine {
+    /// One machine, whatever cards it holds: a hash of the OS machine id, salted so the id
+    /// itself never leaves the host. Absent where the OS offers none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
+    /// One hardware configuration: cards (model, memory, power cap), processor, threads and
+    /// memory. Card serials, driver and OS are left out, so two machines built alike share it
+    /// and one machine that changes a card does not.
+    pub hardware_id: String,
     /// The processor, as `/proc/cpuinfo` names it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu: Option<String>,
@@ -65,15 +74,71 @@ pub struct Gpu {
 /// a container without `/proc`, a host without a driver - and a missing fact must read as
 /// missing rather than as a default.
 pub fn machine() -> Machine {
+    let cpu = cpu_model();
+    let threads = cpu_threads();
+    let ram_gib = ram_gib();
+    let gpus = gpus();
     Machine {
-        cpu: cpu_model(),
-        threads: cpu_threads(),
-        ram_gib: ram_gib(),
+        host_id: host_id(),
+        hardware_id: hardware_id(&cpu, threads, ram_gib, &gpus),
+        cpu,
+        threads,
+        ram_gib,
         os: os_pretty_name(),
         kernel: first_line("/proc/sys/kernel/osrelease"),
         driver: nvml_driver(),
-        gpus: gpus(),
+        gpus,
     }
+}
+
+/// Sixteen hex digits of the SHA-256 of `parts`, each followed by a separator byte so that
+/// ("ab", "c") and ("a", "bc") differ.
+fn short_hash(parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part.as_bytes());
+        hasher.update([0u8]);
+    }
+    hasher.finalize()[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn host_id() -> Option<String> {
+    let id = first_line("/etc/machine-id")?;
+    Some(short_hash(&["assay/host", &id]))
+}
+
+/// The cards enter sorted, so the order NVML indexes them in does not change the id.
+fn hardware_id(
+    cpu: &Option<String>,
+    threads: Option<usize>,
+    ram_gib: Option<u64>,
+    gpus: &[Gpu],
+) -> String {
+    let mut cards: Vec<String> = gpus
+        .iter()
+        .map(|g| {
+            format!(
+                "{}/{}/{}",
+                g.name.as_deref().unwrap_or("?"),
+                g.vram_mib.map_or("?".into(), |v| v.to_string()),
+                g.power_cap_w.map_or("?".into(), |w| w.to_string()),
+            )
+        })
+        .collect();
+    cards.sort();
+    let cards = cards.join(",");
+    let threads = threads.map_or("?".into(), |t| t.to_string());
+    let ram = ram_gib.map_or("?".into(), |r| r.to_string());
+    short_hash(&[
+        "assay/hardware",
+        &cards,
+        cpu.as_deref().unwrap_or("?"),
+        &threads,
+        &ram,
+    ])
 }
 
 fn first_line(path: &str) -> Option<String> {
@@ -247,6 +312,26 @@ mod tests {
         for gpu in &m.gpus {
             assert!(gpu.uuid.is_some() || gpu.name.is_some());
         }
+    }
+
+    /// The same card in a different slot, or the same machine described twice, is one hardware
+    /// configuration; a different power cap is another.
+    #[test]
+    fn hardware_id_ignores_slot_order_and_follows_the_cap() {
+        let card = |index, cap| Gpu {
+            index,
+            uuid: Some(format!("GPU-{index}")),
+            name: Some("Card".into()),
+            vram_mib: Some(16000),
+            power_cap_w: Some(cap),
+        };
+        let cpu = Some("Cpu".to_string());
+        let a = hardware_id(&cpu, Some(8), Some(32), &[card(0, 300), card(1, 180)]);
+        let b = hardware_id(&cpu, Some(8), Some(32), &[card(1, 180), card(0, 300)]);
+        let c = hardware_id(&cpu, Some(8), Some(32), &[card(0, 300), card(1, 200)]);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a.len(), 16);
     }
 
     /// The schema is a major and a minor, and comparison is on the major.

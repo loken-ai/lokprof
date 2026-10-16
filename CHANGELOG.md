@@ -10,6 +10,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Metrics: server decode rate (eval_duration/eval_count), beside client rate.
 - Engines: --loken-label reruns one, LOKEN_CWD alt config, LOKEN_ONLY isolates.
 - Provenance: schema, machine, cards, server reports, rules asserted or null.
+- Machine: host_id and hardware_id, so a card swap stays one host, a new hardware.
 - Conditions: engine processes and card readings before first request recorded.
 - Comparison: class from schema major, protocol, flags, machine, builds; else unknown.
 - Quarantine: submissions validated into a pool, promoted on a class match.
