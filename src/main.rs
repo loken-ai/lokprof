@@ -484,9 +484,10 @@ async fn main() {
     {
         for t in &targets {
             let said = provenance::engine_identity(&probe, &t.url).await;
+            let devices = provenance::engine_devices(&probe, &t.url).await;
             subjects.insert(
                 t.label.clone(),
-                serde_json::json!({"url": t.url, "says": said}),
+                serde_json::json!({"url": t.url, "says": said, "devices": devices}),
             );
         }
     }

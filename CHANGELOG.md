@@ -11,6 +11,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Engines: --loken-label reruns one, LOKEN_CWD alt config, LOKEN_ONLY isolates.
 - Provenance: schema, machine, cards, server reports, rules asserted or null.
 - Machine: host_id and hardware_id, so a card swap stays one host, a new hardware.
+- Subjects: the devices and backends a server detected, recorded with its version.
 - Comparison: a class names the hardware by its id, shared by builds alike.
 - Store: runs filed once under their content hash, with a rebuilt index.
 - Archive: an operator can attest the machine that took an old report.

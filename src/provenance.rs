@@ -292,6 +292,38 @@ pub async fn engine_identity(http: &reqwest::Client, base_url: &str) -> Option<s
     None
 }
 
+/// The devices a server says it detected and the backends it was built with, reduced to the
+/// facts a comparison depends on: the type, name and state of each device, and the compiled
+/// features. Live telemetry (temperature, power, free memory) is left out, so asking twice
+/// gives the same answer.
+///
+/// Only loken answers this route; for any other engine the result is `None`, which a reader
+/// must take as "not stated", never as "no accelerator".
+pub async fn engine_devices(http: &reqwest::Client, base_url: &str) -> Option<serde_json::Value> {
+    let url = format!("{}/api/distributed/devices", base_url.trim_end_matches('/'));
+    let resp = http.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body = resp.json::<serde_json::Value>().await.ok()?;
+    let devices: Vec<serde_json::Value> = body
+        .get("devices")?
+        .as_array()?
+        .iter()
+        .map(|d| {
+            serde_json::json!({
+                "type": d.get("type"),
+                "name": d.get("name"),
+                "status": d.get("status"),
+            })
+        })
+        .collect();
+    Some(serde_json::json!({
+        "devices": devices,
+        "compiled": body.pointer("/summary/compiled_features"),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
