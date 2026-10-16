@@ -331,7 +331,8 @@ mod tests {
         let c = hardware_id(&cpu, Some(8), Some(32), &[card(0, 300), card(1, 200)]);
         assert_eq!(a, b);
         assert_ne!(a, c);
-        assert_eq!(a.len(), 16);
+        // The same vector is pinned in scripts/hardware.py: both sides must agree.
+        assert_eq!(a, "e6edf7e117a392d7");
     }
 
     /// The schema is a major and a minor, and comparison is on the major.
