@@ -14,6 +14,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Comparison: a class names the hardware by its id, shared by builds alike.
 - Store: runs filed once under their content hash, with a rebuilt index.
 - Archive: an operator can attest the machine that took an old report.
+- Records: replayable measurement records brought in with their inputs kept.
 - Conditions: engine processes and card readings before first request recorded.
 - Comparison: class from schema major, protocol, flags, machine, builds; else unknown.
 - Quarantine: submissions validated into a pool, promoted on a class match.

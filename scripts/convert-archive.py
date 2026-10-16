@@ -19,24 +19,12 @@ reference's are not the archive's), and marks the block `attested` so nobody rea
 measured. `--attest-host` adds this machine's host_id. The attestation fills only what is
 absent: a record that already carries a machine keeps it.
 """
-import argparse, hashlib, json, pathlib, sys
+import argparse, json, pathlib, sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import hardware as H
 
 SCHEMA = "assay/2"
-ATTEST_FIELDS = ("cpu", "threads", "ram_gib", "gpus")
-
-
-def attested(reference: dict, host: bool, source: pathlib.Path) -> dict:
-    ref = reference["machine"]
-    m = {k: ref[k] for k in ATTEST_FIELDS if k in ref}
-    m["gpus"] = [{k: v for k, v in g.items() if k != "uuid"} for g in m.get("gpus", [])]
-    m["hardware_id"] = H.hardware_id(m)
-    if host:
-        m["host_id"] = H.host_id_here()
-    m["attested"] = f"by the operator, from {source.name}; driver, kernel and OS unknown"
-    return m
 
 
 def convert(old: dict, source: pathlib.Path) -> dict:
@@ -96,7 +84,7 @@ def main() -> int:
         else:
             new = convert(old, path)
         if reference is not None and not new.get("machine"):
-            new["machine"] = attested(reference, args.attest_host, args.attest_machine)
+            new["machine"] = H.attested(reference, args.attest_host, args.attest_machine.name)
         out = args.into / path.name
         out.write_text(json.dumps(new, indent=2) + "\n")
         done += 1
