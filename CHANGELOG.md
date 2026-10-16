@@ -13,6 +13,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Machine: host_id and hardware_id, so a card swap stays one host, a new hardware.
 - Comparison: a class names the hardware by its id, shared by builds alike.
 - Store: runs filed once under their content hash, with a rebuilt index.
+- Archive: an operator can attest the machine that took an old report.
 - Conditions: engine processes and card readings before first request recorded.
 - Comparison: class from schema major, protocol, flags, machine, builds; else unknown.
 - Quarantine: submissions validated into a pool, promoted on a class match.
