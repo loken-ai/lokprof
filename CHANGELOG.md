@@ -5,6 +5,8 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-18
+
 ### Added
 
 - Metrics: server decode rate (eval_duration/eval_count), beside client rate.
