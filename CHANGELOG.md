@@ -46,6 +46,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ### Security
 
 - Security: deny.toml allows tree licences, bars yanked and unknown sources; h2 patched.
+- Security: rustls 0.23.46, past four advisories on its TLS client.
 
 ## [0.1.0] - 2026-08-18
 
