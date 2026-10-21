@@ -9,6 +9,10 @@ use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
+/// Bytes of an answer kept for the coherence gate. Large enough for a whole bench answer, so a
+/// streamed answer is judged on the same text as a non-streamed one.
+const COHERENCE_TEXT_CAP: usize = 64 * 1024;
+
 /// Which wire protocol a target server speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
@@ -1246,7 +1250,7 @@ impl BenchClient {
                     {
                         token_count += 1;
                         token_times_ms.push(now);
-                        if text_acc.len() < 256 {
+                        if text_acc.len() < COHERENCE_TEXT_CAP {
                             if let Ok(r) = serde_json::from_str::<GenerateResponse>(l) {
                                 if let Some(err) = r.as_server_error() {
                                     return Err(format!("server error: {}", err));
@@ -1536,7 +1540,7 @@ impl BenchClient {
                     }
                     token_count += 1;
                     token_times_ms.push(start.elapsed().as_secs_f64() * 1000.0);
-                    if text_acc.len() < 256 {
+                    if text_acc.len() < COHERENCE_TEXT_CAP {
                         text_acc.push_str(delta);
                     }
                 }

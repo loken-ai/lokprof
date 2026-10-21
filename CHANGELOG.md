@@ -5,6 +5,10 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Coherence: judge a streamed answer on its whole text, as a non-streamed one.
+
 ## [0.2.0] - 2026-10-18
 
 ### Added
