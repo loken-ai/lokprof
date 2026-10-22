@@ -159,7 +159,7 @@ pub fn wav_duration_seconds(bytes: &[u8]) -> Option<f64> {
 }
 
 /// Turn a TTS audio reply and the wall time it took into metrics. Separate from the request so it is
-/// tested without a server; expects a WAV (assay asks for `response_format: "wav"`).
+/// tested without a server; expects a WAV (lokprof asks for `response_format: "wav"`).
 pub fn tts_metrics_from(audio: &[u8], wall_clock_ms: f64) -> Result<AudioMetrics, String> {
     let audio_seconds = wav_duration_seconds(audio)
         .ok_or_else(|| format!("reply is not a parseable WAV ({} bytes)", audio.len()))?;

@@ -5,10 +5,10 @@
 //!
 //! Usage:
 //!   # Single model, single context, default prompts
-//!   assay --ollama 11434 --loken 11435 --models qwen3:latest --stream
+//!   lokprof --ollama 11434 --loken 11435 --models qwen3:latest --stream
 //!
 //!   # Full sweep with JSON + CSV output
-//!   assay --ollama 11434 --loken 11435 \
+//!   lokprof --ollama 11434 --loken 11435 \
 //!       --models qwen3:latest,devstral-small-2:latest \
 //!       --num-ctx 2048,4096 --stream -n 3 \
 //!       -o sweep.json --output-csv sweep.csv
@@ -121,7 +121,7 @@ fn builtin_prompt(name: &str) -> Option<&'static str> {
 // CLI -------------------------------------------------------------------------
 
 #[derive(Parser)]
-#[command(name = "assay")]
+#[command(name = "lokprof")]
 #[command(
     about = "Inference server benchmark - compare Ollama vs LOKEN across models, contexts, and prompts"
 )]
@@ -249,7 +249,7 @@ struct Args {
 
     /// What the listed models are, so the cell is measured by the right clock: `text` (default),
     /// `vision`, `image` (generation), `tts`, or `asr`. The driver derives it from what loken
-    /// declares and passes it; assay does not guess it from the model name.
+    /// declares and passes it; lokprof does not guess it from the model name.
     #[arg(long, default_value = "text")]
     modality: String,
 

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to assay. The format follows [Keep a Changelog](https://keepachangelog.com/1.1.0/),
+All notable changes to lokprof. The format follows [Keep a Changelog](https://keepachangelog.com/1.1.0/),
 and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
@@ -8,6 +8,12 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Coherence: judge a streamed answer on its whole text, as a non-streamed one.
+
+### Changed
+
+- Project: rename assay to lokprof.
+- Records: name the schema loken and still read the old name.
+- Records: derive the host and hardware ids without the tool's name.
 
 ## [0.2.0] - 2026-10-18
 

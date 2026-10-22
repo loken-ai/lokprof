@@ -17,7 +17,8 @@ use sha2::{Digest, Sha256};
 
 /// The shape of the record. Bumped when a rule changes what a number means, never for a new
 /// field: a reader compares majors and refuses across them.
-pub const SCHEMA: &str = "assay/2";
+/// Records written before the schema was named loken carry the tool's old name; readers accept both.
+pub const SCHEMA: &str = "loken/2";
 
 /// The machine, as it describes itself.
 #[derive(Debug, Serialize)]
@@ -107,7 +108,7 @@ fn short_hash(parts: &[&str]) -> String {
 
 fn host_id() -> Option<String> {
     let id = first_line("/etc/machine-id")?;
-    Some(short_hash(&["assay/host", &id]))
+    Some(short_hash(&["loken/host", &id]))
 }
 
 /// The cards enter sorted, so the order NVML indexes them in does not change the id.
@@ -133,7 +134,7 @@ fn hardware_id(
     let threads = threads.map_or("?".into(), |t| t.to_string());
     let ram = ram_gib.map_or("?".into(), |r| r.to_string());
     short_hash(&[
-        "assay/hardware",
+        "loken/hardware",
         &cards,
         cpu.as_deref().unwrap_or("?"),
         &threads,
@@ -364,14 +365,14 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
         // The same vector is pinned in scripts/hardware.py: both sides must agree.
-        assert_eq!(a, "e6edf7e117a392d7");
+        assert_eq!(a, "9e3586b770949eea");
     }
 
     /// The schema is a major and a minor, and comparison is on the major.
     #[test]
     fn the_schema_names_a_major() {
         let (name, version) = SCHEMA.split_once('/').expect("schema names a version");
-        assert_eq!(name, "assay");
+        assert_eq!(name, "loken");
         assert!(version.parse::<u32>().is_ok(), "{version}");
     }
 }
