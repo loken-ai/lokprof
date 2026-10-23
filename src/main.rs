@@ -2254,7 +2254,10 @@ fn save_json(
         "timestamp": chrono::Utc::now().to_rfc3339(),
         // What produced the numbers. A rate from another driver, kernel or card is a
         // different rate, and nothing else in this file would say so.
-        "machine": provenance::machine(),
+        "machine": subjects
+            .values()
+            .find_map(|s| s.get("devices").filter(|d| !d.is_null()))
+            .map_or_else(provenance::machine, |d| provenance::machine().seen_by(d)),
         "subjects": subjects,
         "protocol": {
             "iterations": args.iterations,

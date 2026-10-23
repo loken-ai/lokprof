@@ -92,6 +92,54 @@ pub fn machine() -> Machine {
     }
 }
 
+impl Machine {
+    /// The machine as the server that answered saw it: the cards it lists, not every card the
+    /// vendor library finds. A campaign that hides the cards of one vendor from every engine
+    /// then describes the cards it measured, whichever vendor they come from. A card the vendor
+    /// library also knows keeps its details; any other is named as the server names it.
+    pub fn seen_by(mut self, devices: &serde_json::Value) -> Self {
+        let names: Vec<String> = devices
+            .get("devices")
+            .and_then(|d| d.as_array())
+            .into_iter()
+            .flatten()
+            .filter(|d| d.get("status").and_then(|s| s.as_str()) == Some("available"))
+            .filter(|d| {
+                d.get("backend")
+                    .or_else(|| d.get("type"))
+                    .and_then(|t| t.as_str())
+                    .is_some_and(|t| !t.eq_ignore_ascii_case("cpu"))
+            })
+            .filter_map(|d| d.get("name").and_then(|n| n.as_str()).map(str::to_string))
+            .collect();
+        if names.is_empty() {
+            return self;
+        }
+        let mut known = std::mem::take(&mut self.gpus);
+        let mut gpus = Vec::new();
+        for (index, name) in names.iter().enumerate() {
+            let mut gpu = match known.iter().position(|g| g.name.as_deref() == Some(name)) {
+                Some(at) => known.remove(at),
+                None => Gpu {
+                    index: 0,
+                    uuid: None,
+                    name: Some(name.clone()),
+                    vram_mib: None,
+                    power_cap_w: None,
+                },
+            };
+            gpu.index = index as u32;
+            gpus.push(gpu);
+        }
+        if gpus.iter().all(|g| g.uuid.is_none()) {
+            self.driver = None;
+        }
+        self.hardware_id = hardware_id(&self.cpu, self.threads, self.ram_gib, &gpus);
+        self.gpus = gpus;
+        self
+    }
+}
+
 /// Sixteen hex digits of the SHA-256 of `parts`, each followed by a separator byte so that
 /// ("ab", "c") and ("a", "bc") differ.
 fn short_hash(parts: &[&str]) -> String {
@@ -314,6 +362,7 @@ pub async fn engine_devices(http: &reqwest::Client, base_url: &str) -> Option<se
         .map(|d| {
             serde_json::json!({
                 "type": d.get("type"),
+                "backend": d.get("backend"),
                 "name": d.get("name"),
                 "status": d.get("status"),
             })
@@ -328,6 +377,23 @@ pub async fn engine_devices(http: &reqwest::Client, base_url: &str) -> Option<se
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A machine described by the cards a server lists: the card of another vendor is named as
+    /// the server names it, and the hardware id follows the cards that were measured.
+    #[test]
+    fn a_machine_is_described_by_the_cards_the_server_saw() {
+        let seen = serde_json::json!({"devices": [
+            {"type": "CUDA", "backend": "rocm", "name": "AMD Radeon RX 9070 XT", "status": "available"},
+            {"type": "CPU", "backend": "cpu", "name": "CPU (20 cores)", "status": "available"}]});
+        let all = machine();
+        let amd = machine().seen_by(&seen);
+        assert_eq!(amd.gpus.len(), 1);
+        assert_eq!(amd.gpus[0].name.as_deref(), Some("AMD Radeon RX 9070 XT"));
+        assert_ne!(amd.hardware_id, all.hardware_id);
+        assert!(amd.gpus[0].uuid.is_none() && amd.driver.is_none());
+        let silent = machine().seen_by(&serde_json::json!({"devices": []}));
+        assert_eq!(silent.hardware_id, all.hardware_id);
+    }
 
     /// Every field is optional, and a machine that cannot answer one of them still produces a
     /// record. The alternative - a default - is a fact that reads as measured and is not.

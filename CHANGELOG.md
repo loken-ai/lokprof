@@ -14,6 +14,8 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Project: rename assay to lokprof.
 - Records: name the schema loken and still read the old name.
 - Records: derive the host and hardware ids without the tool's name.
+- Records: describe the machine by the cards the measured server saw.
+- Records: name the backend of each device the server lists.
 
 ## [0.2.0] - 2026-10-18
 
