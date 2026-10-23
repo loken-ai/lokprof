@@ -16,6 +16,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Records: derive the host and hardware ids without the tool's name.
 - Records: describe the machine by the cards the measured server saw.
 - Records: name the backend of each device the server lists.
+- Campaign: describe a merged record by the machine its server saw.
 
 ## [0.2.0] - 2026-10-18
 
