@@ -265,7 +265,7 @@ fn gpus() -> Vec<Gpu> {
 
 /// The engine-shaped processes running on this machine, by name.
 ///
-/// The protocol says one engine at a time with the others stopped, and the scripts enforce it.
+/// The protocol says one engine at a time with the others stopped, and the campaign enforces it.
 /// Nothing wrote down that they had, so a report taken under the rule and one taken beside a
 /// running peer were the same file. This is what the runner can see for itself: the names, as
 /// `/proc` gives them, of every process that could be serving a model.
@@ -430,7 +430,7 @@ mod tests {
         let c = hardware_id(&cpu, Some(8), Some(32), &[card(0, 300), card(1, 200)]);
         assert_eq!(a, b);
         assert_ne!(a, c);
-        // The same vector is pinned in scripts/hardware.py: both sides must agree.
+        // The same vector is pinned in the benchmarks repository: both sides must agree.
         assert_eq!(a, "9e3586b770949eea");
     }
 

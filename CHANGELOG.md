@@ -5,6 +5,10 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- Scripts: move the fair-run harness, the card policy and the record store to the benchmarks repository.
+
 ## [0.3.0] - 2026-10-25
 
 ### Fixed

@@ -40,7 +40,8 @@ difference between engines hides:
   exist on other platforms but live in MSRs that only a kernel driver can read, and a
   benchmark has no business installing one.
 - **the engines are made comparable before they are compared.** Which cards each engine may
-  use is decided once, at launch, and applied to all of them - see `scripts/gpu-policy.sh`.
+  use is decided once, at launch, and applied to all of them, by the campaign in the
+  [benchmarks](https://github.com/loken-ai/benchmarks) repository.
   Restricting one engine to a card while the others keep the machine is the easiest way to
   publish a fiction, and it is what a per-request pin quietly does. `--num-gpu 0` remains for
   the CPU-to-CPU cell, where the other engines are launched CPU-only alongside it.
@@ -49,29 +50,12 @@ difference between engines hides:
 
 ## Reproducing a fair run
 
-The tool measures; making the measurement mean something is the harness's job, and both ship
-here so a comparison can be replayed elsewhere:
-
-```sh
-BENCH_MODE=gpu GPUS=0,1 OUT=results/three-way.json \
-  scripts/fair-run.sh --models qwen3:latest --prompts short,medium,long
-```
-
-- **`scripts/gpu-policy.sh`** decides which cards each engine may use, and is the only place
-  that decision is written. It resolves an index list to device **UUIDs** - `CUDA_VISIBLE_DEVICES=0`
-  is a different physical card depending on the ordering - and translates one policy into each
-  engine's own lever: `OLLAMA_SCHED_SPREAD` when ollama can see more than one card, because
-  exposing cards is not the same as using them, and `--tensor-parallel-size` for vLLM. Per-engine
-  overrides (`OLLAMA_GPUS`, `LOKEN_GPUS`, `VLLM_GPUS`) exist for the deliberately asymmetric run;
-  the banner says when they differ, because then the cells are not like-for-like.
-- **`scripts/fair-run.sh`** runs one engine at a time with the others' processes stopped, restarts
-  each one cold, discards warm-up, forces greedy decoding, and waits on a thermal gate so the
-  engine measured second is not measured on a hotter machine. Whether ollama is pinned to one
-  card is derived from the weights against one card's usable capacity - a pin that is right for
-  a model that fits is wrong for one that does not, so it cannot be a constant.
-
-Neither is optional if you intend to publish the numbers. Most of what these scripts do exists
-because a run without it produced a figure that was wrong in a way nobody noticed.
+The tool measures; making the measurement mean something is the campaign's job, and it lives in
+the [benchmarks](https://github.com/loken-ai/benchmarks) repository: one engine at a time with the others' processes stopped,
+the same cards for every engine, cold restarts, warm-up discarded, greedy decoding and a thermal
+gate. It drives this tool, and anyone can run it and share the runs there. Most of what the
+campaign does exists because a run without it produced a figure that was wrong in a way nobody
+noticed.
 
 ## Build
 

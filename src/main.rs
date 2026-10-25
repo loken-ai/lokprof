@@ -163,7 +163,7 @@ struct Args {
 
     /// Force Ollama's `num_gpu` (layers offloaded to GPU). Ollama-only - the other engines
     /// never receive it, and are put on the CPU by how they were launched instead. Which
-    /// cards each engine may use is decided at launch, not here: see scripts/gpu-policy.sh.
+    /// cards each engine may use is decided at launch, not here: see the campaign in the benchmarks repository.
     #[arg(long)]
     num_gpu: Option<usize>,
 
@@ -2267,7 +2267,7 @@ fn save_json(
             "unique_prompt": args.unique_prompt,
             "prefix_reuse_offered": args.session_id.is_some(),
             // Observed by the runner rather than asserted by whoever launched it. The
-            // protocol says one engine at a time on cards at idle, the scripts enforce it, and
+            // protocol says one engine at a time on cards at idle, the campaign enforces it, and
             // until now nothing wrote down that they had - so a report taken under the rule and
             // one taken beside a running peer were the same file.
             //
