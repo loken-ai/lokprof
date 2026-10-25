@@ -16,6 +16,7 @@
 mod api;
 mod coherence;
 mod energy;
+mod gpu_energy;
 mod gpu_sampler;
 mod host_sampler;
 mod provenance;
@@ -573,21 +574,28 @@ async fn main() {
         } else {
             0.0
         };
-        println!(
-            "  Idle baseline: {:.2} J over {:.1}s = {:.1} W ({}){}",
-            w.energy_j,
-            w.duration_s,
-            idle_w,
-            if w.domains_counted.is_empty() {
-                "no counters".to_string()
-            } else {
-                w.domains_counted.join("+")
-            },
-            w.note
-                .as_deref()
-                .map(|n| format!("  [{}]", n))
-                .unwrap_or_default(),
-        );
+        if w.complete {
+            println!(
+                "  Idle baseline: {:.2} J over {:.1}s = {:.1} W ({}){}",
+                w.energy_j,
+                w.duration_s,
+                idle_w,
+                w.domains_counted.join("+"),
+                w.note
+                    .as_deref()
+                    .map(|n| format!("  [{}]", n))
+                    .unwrap_or_default(),
+            );
+        } else {
+            println!(
+                "  Idle baseline: not measurable, {} could not be read{}",
+                w.missing_domains.join(", "),
+                w.note
+                    .as_deref()
+                    .map(|n| format!("  [{}]", n))
+                    .unwrap_or_default(),
+            );
+        }
         Some(w)
     } else {
         None
@@ -1359,10 +1367,11 @@ async fn run_cell<'a>(
                                 ew.gco2_per_tok(toks, carbon_intensity).unwrap_or(0.0)
                             );
                         }
-                        None => println!(
-                            "        energy: counters unavailable ({})",
-                            ew.note.as_deref().unwrap_or("none")
+                        None if !ew.complete => println!(
+                            "        energy: not measurable, {} could not be read",
+                            ew.missing_domains.join(", ")
                         ),
+                        None => println!("        energy: no value for this iteration"),
                     }
                 }
                 all_metrics.push(metrics);
@@ -2174,29 +2183,7 @@ fn save_json(
                     // Energy: derive per-token metrics from the window + this iter's tokens.
                     let energy = c.energy_per_iter.get(i).and_then(|e| e.as_ref()).map(|w| {
                         let toks = m.tokens_generated.unwrap_or(0);
-                        serde_json::json!({
-                            "energy_j": w.energy_j,
-                            "gpu_energy_j": w.gpu_energy_j,
-                            "cpu_pkg_energy_j": w.cpu_pkg_energy_j,
-                            "dram_energy_j": w.dram_energy_j,
-                            "duration_s": w.duration_s,
-                            "j_per_tok": w.j_per_tok(toks),
-                            "wh_per_tok": w.wh_per_tok(toks),
-                            "gco2_per_tok": w.gco2_per_tok(toks, c.carbon_intensity),
-                            "carbon_intensity_gco2_per_kwh": c.carbon_intensity,
-                            "gpu_path": w.gpu_path,
-                            "domains_counted": w.domains_counted,
-                            "cpu_rapl_available": w.cpu_rapl_available,
-                            "dram_rapl_available": w.dram_rapl_available,
-                            "note": w.note,
-                            // Decode-phase (prefill-excluded) - the cache-confound-free metric.
-                            "gpu_decode_j": w.gpu_decode_j,
-                            "cpu_pkg_decode_j": w.cpu_pkg_decode_j,
-                            "dram_decode_j": w.dram_decode_j,
-                            "decode_energy_j": w.decode_energy_j,
-                            "decode_duration_s": w.decode_duration_s,
-                            "j_per_decode_tok": w.j_per_decode_tok(toks),
-                        })
+                        w.to_json(toks, c.carbon_intensity)
                     });
                     serde_json::json!({
                         "iteration": i + 1,
@@ -2300,16 +2287,7 @@ fn save_json(
             "unique_prompt": args.unique_prompt,
             "num_gpu": args.num_gpu,
         },
-        "idle_energy_baseline": idle_energy.map(|w| serde_json::json!({
-            "energy_j": w.energy_j,
-            "gpu_energy_j": w.gpu_energy_j,
-            "cpu_pkg_energy_j": w.cpu_pkg_energy_j,
-            "dram_energy_j": w.dram_energy_j,
-            "duration_s": w.duration_s,
-            "idle_watts": if w.duration_s > 0.0 { w.energy_j / w.duration_s } else { 0.0 },
-            "domains_counted": w.domains_counted,
-            "note": w.note,
-        })),
+        "idle_energy_baseline": idle_energy.map(|w| w.idle_json()),
         "results": results,
     });
 
@@ -2403,6 +2381,9 @@ mod pairing_tests {
             dram_rapl_available: false,
             domains_counted: vec!["gpu".into()],
             note: None,
+            complete: true,
+            missing_domains: vec![],
+            gpu_sources: vec![],
             gpu_decode_j: None,
             cpu_pkg_decode_j: None,
             dram_decode_j: None,

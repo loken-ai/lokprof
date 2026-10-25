@@ -13,25 +13,31 @@
 //! WHAT IT COVERS, BY PLATFORM. `domains_counted` records which of gpu / cpu_pkg / dram
 //! actually contributed, and it is not the same everywhere:
 //!
-//! - **GPU** - NVML's `total_energy_consumption` counter, or power draw integrated over the
-//!   window when the counter is absent. Works wherever NVML does, Windows included.
+//! - **GPU** - for an NVIDIA card, NVML's `total_energy_consumption` counter, or power draw
+//!   integrated over the window when the counter is absent. For an AMD card, the power the
+//!   amdgpu driver publishes in hwmon, integrated over the window (an estimate, labelled so),
+//!   or its energy counter when it has one. An integrated GPU is inside the processor's
+//!   package domain.
 //! - **CPU** - Intel RAPL package energy from the `energy_uj` counters under
 //!   /sys/class/powercap. **Linux only.** The same counters exist elsewhere, but in MSRs that
 //!   only ring 0 can read: no userspace path without a kernel driver, and Intel's supported
 //!   route, Power Gadget, was discontinued in 2023.
 //! - **DRAM** - the RAPL `dram` subdomain, where the platform exposes one. Same Linux limit.
 //!
-//! So a Windows run counts the GPU alone and its J/token is mechanically lower than a Linux
-//! run of the same work. The two are different quantities; the reported labels say which, so
-//! they are not subtracted from one another by accident.
+//! WHEN A DOMAIN CANNOT BE READ. A total that leaves out a domain the machine has is not a
+//! smaller measurement of the same thing, it is another quantity, and next to a complete one it
+//! reads as a result: the energy of an AMD card computed from an idle NVIDIA card beside it came
+//! out at a few joules for a request. So a window is `complete` only when every card of the
+//! machine and the processor's package were read. Otherwise every energy figure of the window is
+//! left null, `missing_domains` names what could not be read, and `note` says why.
 //!
-//! Wraparound on the RAPL counters is handled (see `rapl_delta_j`). If the counters are
-//! unreadable - no permission, no hardware, wrong platform - the window is still reported,
-//! the missing domain is absent from `domains_counted`, and `note` says why. To grant access
-//! on Linux without running as root:
+//! Wraparound on the RAPL counters is handled (see `rapl_delta_j`). To let a user read the
+//! processor's counters on Linux, the benchmarks repository carries `scripts/enable-energy.sh`;
+//! by hand it is:
 //!
 //!   sudo chmod -R a+r /sys/class/powercap/intel-rapl:*/energy_uj
 
+use crate::gpu_energy;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -82,6 +88,14 @@ pub struct EnergyWindow {
     pub domains_counted: Vec<String>,
     /// Note explaining any unavailable domain (e.g. RAPL needs root).
     pub note: Option<String>,
+    /// True when every card of the machine and the processor's package were read. Only then
+    /// are the energy figures of the window stored.
+    pub complete: bool,
+    /// What could not be read, by name (`cpu_pkg`, `dram`, a card).
+    pub missing_domains: Vec<String>,
+    /// Where each part of the GPU energy came from (`nvml_counter`, `nvml_power`,
+    /// `amdgpu_hwmon_counter`, `amdgpu_hwmon_power`).
+    pub gpu_sources: Vec<String>,
     /// GPU energy over the DECODE phase only (J) - the window from the first
     /// generated token to the end, excluding prefill. `None` when no decode
     /// boundary was supplied or the time-series was empty. This is the honest
@@ -102,7 +116,7 @@ pub struct EnergyWindow {
 impl EnergyWindow {
     /// Energy per generated token (J/tok) over this window.
     pub fn j_per_tok(&self, tokens: u64) -> Option<f64> {
-        if tokens == 0 || self.energy_j <= 0.0 {
+        if !self.complete || tokens == 0 || self.energy_j <= 0.0 {
             return None;
         }
         Some(self.energy_j / tokens as f64)
@@ -130,13 +144,88 @@ impl EnergyWindow {
     /// the full window instead, so a row labelled "decode" carried prefill energy and read as
     /// the confound-free figure it exists to replace. An absent row says that plainly.
     pub fn j_per_decode_tok(&self, tokens: u64) -> Option<f64> {
-        if tokens == 0 {
+        if !self.complete || tokens == 0 {
             return None;
         }
         match self.decode_energy_j {
             Some(e) if e > 0.0 => Some(e / tokens as f64),
             _ => None,
         }
+    }
+}
+
+impl EnergyWindow {
+    /// The window as it is stored in a result file. The energy figures are null unless the
+    /// window is `complete`: a partial total is not stored.
+    pub fn to_json(&self, tokens: u64, carbon_intensity: f64) -> serde_json::Value {
+        let n = |v: f64| {
+            if self.complete {
+                serde_json::json!(v)
+            } else {
+                serde_json::Value::Null
+            }
+        };
+        let o = |v: Option<f64>| {
+            if self.complete {
+                serde_json::json!(v)
+            } else {
+                serde_json::Value::Null
+            }
+        };
+        serde_json::json!({
+            "complete": self.complete,
+            "missing_domains": self.missing_domains,
+            "energy_j": n(self.energy_j),
+            "gpu_energy_j": n(self.gpu_energy_j),
+            "cpu_pkg_energy_j": n(self.cpu_pkg_energy_j),
+            "dram_energy_j": n(self.dram_energy_j),
+            "duration_s": self.duration_s,
+            "j_per_tok": self.j_per_tok(tokens),
+            "wh_per_tok": self.wh_per_tok(tokens),
+            "gco2_per_tok": self.gco2_per_tok(tokens, carbon_intensity),
+            "carbon_intensity_gco2_per_kwh": carbon_intensity,
+            "gpu_path": self.gpu_path,
+            "gpu_sources": self.gpu_sources,
+            "domains_counted": self.domains_counted,
+            "cpu_rapl_available": self.cpu_rapl_available,
+            "dram_rapl_available": self.dram_rapl_available,
+            "note": self.note,
+            // Decode-phase (prefill-excluded) - the cache-confound-free metric.
+            "gpu_decode_j": o(self.gpu_decode_j),
+            "cpu_pkg_decode_j": o(self.cpu_pkg_decode_j),
+            "dram_decode_j": o(self.dram_decode_j),
+            "decode_energy_j": o(self.decode_energy_j),
+            "decode_duration_s": self.decode_duration_s,
+            "j_per_decode_tok": self.j_per_decode_tok(tokens),
+        })
+    }
+
+    /// The idle baseline as it is stored: the draw of the machine with nothing running, null
+    /// when it was not fully measured.
+    pub fn idle_json(&self) -> serde_json::Value {
+        let n = |v: f64| {
+            if self.complete {
+                serde_json::json!(v)
+            } else {
+                serde_json::Value::Null
+            }
+        };
+        serde_json::json!({
+            "complete": self.complete,
+            "missing_domains": self.missing_domains,
+            "energy_j": n(self.energy_j),
+            "gpu_energy_j": n(self.gpu_energy_j),
+            "cpu_pkg_energy_j": n(self.cpu_pkg_energy_j),
+            "dram_energy_j": n(self.dram_energy_j),
+            "duration_s": self.duration_s,
+            "idle_watts": if self.complete && self.duration_s > 0.0 {
+                serde_json::json!(self.energy_j / self.duration_s)
+            } else {
+                serde_json::Value::Null
+            },
+            "domains_counted": self.domains_counted,
+            "note": self.note,
+        })
     }
 }
 
@@ -337,6 +426,9 @@ pub struct EnergySampler {
     rapl_start: Vec<Option<u128>>,
     // GPU NVML counter path
     gpu_start_j: Option<f64>,
+    // The cards of this machine, and whether a trace of their energy is being recorded.
+    cards: Vec<gpu_energy::Card>,
+    traced: bool,
     // GPU power-integration fallback (only spawned when the counter is absent)
     power_stop: Option<Arc<AtomicBool>>,
     power_handle: Option<JoinHandle<f64>>,
@@ -346,7 +438,8 @@ pub struct EnergySampler {
     // decode split is unavailable (full-window energy is still reported).
     trace: Arc<Mutex<Vec<EnergyTrace>>>,
     trace_stop: Arc<AtomicBool>,
-    trace_handle: Option<JoinHandle<()>>,
+    /// Ends with the joules the non-NVIDIA cards drew over the window.
+    trace_handle: Option<JoinHandle<f64>>,
 }
 
 impl EnergySampler {
@@ -359,6 +452,9 @@ impl EnergySampler {
         let rapl_start = rapl_snapshot(&rapl_domains);
 
         let gpu_start_j = nvml_energy_snapshot_j();
+        let cards = gpu_energy::discover(std::path::Path::new("/sys/class/drm"));
+        let meters = gpu_energy::meters(&cards, start_instant);
+        let traced = gpu_start_j.is_some() || !meters.is_empty();
 
         // Only run the power-integration thread when we have no energy counter.
         let (power_stop, power_handle) = if gpu_start_j.is_none() {
@@ -377,22 +473,22 @@ impl EnergySampler {
         // is reused across ticks; RAPL is re-snapshotted each tick.
         let trace = Arc::new(Mutex::new(Vec::new()));
         let trace_stop = Arc::new(AtomicBool::new(false));
-        let trace_handle = if gpu_start_j.is_some() {
+        let trace_handle = if traced {
             let trace_c = trace.clone();
             let stop_c = trace_stop.clone();
             let domains_c = rapl_domains.clone();
             let rapl_start_c = rapl_start.clone();
-            let gpu0 = gpu_start_j.unwrap_or(0.0);
             Some(tokio::task::spawn_blocking(move || {
-                energy_trace_loop(
-                    stop_c,
-                    trace_c,
-                    power_interval_ms,
-                    start_instant,
-                    gpu0,
-                    domains_c,
-                    rapl_start_c,
-                )
+                energy_trace_loop(TraceSetup {
+                    stop: stop_c,
+                    trace: trace_c,
+                    interval_ms: power_interval_ms,
+                    start: start_instant,
+                    gpu_start_j,
+                    domains: domains_c,
+                    rapl_start: rapl_start_c,
+                    meters,
+                })
             }))
         } else {
             None
@@ -404,6 +500,8 @@ impl EnergySampler {
             rapl_readable,
             rapl_start,
             gpu_start_j,
+            cards,
+            traced,
             power_stop,
             power_handle,
             trace,
@@ -422,13 +520,14 @@ impl EnergySampler {
 
         // Stop and collect the time-series before re-reading the end counters.
         self.trace_stop.store(true, Ordering::Relaxed);
+        let mut other_gpu_j = 0.0;
         if let Some(h) = self.trace_handle.take() {
-            let _ = h.await;
+            other_gpu_j = h.await.unwrap_or(0.0);
         }
         let trace = self.trace.lock().map(|t| t.clone()).unwrap_or_default();
 
-        // GPU energy
-        let (gpu_energy_j, gpu_path) = if let Some(start_j) = self.gpu_start_j {
+        // GPU energy of the NVIDIA cards
+        let (nvidia_j, nvidia_path) = if let Some(start_j) = self.gpu_start_j {
             // NVML counter path: re-read and diff (monotonic, no wrap in practice
             // over a bench window).
             // A failed closing read used to fall back to the opening one, which yields
@@ -453,6 +552,38 @@ impl EnergySampler {
             }
         } else {
             (0.0, GpuEnergyPath::None)
+        };
+        // The cards NVML does not cover add what their hwmon readings integrated to.
+        let gpu_energy_j = nvidia_j + other_gpu_j;
+        let mut gpu_sources: Vec<String> = Vec::new();
+        match nvidia_path {
+            GpuEnergyPath::NvmlCounter => gpu_sources.push("nvml_counter".into()),
+            GpuEnergyPath::PowerIntegration => gpu_sources.push("nvml_power".into()),
+            GpuEnergyPath::None => {}
+        }
+        for card in &self.cards {
+            let label = match card.vendor {
+                gpu_energy::Vendor::Amd => "amdgpu",
+                gpu_energy::Vendor::Intel => "intel",
+                gpu_energy::Vendor::Nvidia => continue,
+            };
+            match &card.source {
+                Some(gpu_energy::Source::Counter(_)) => {
+                    gpu_sources.push(format!("{label}_hwmon_counter"))
+                }
+                Some(gpu_energy::Source::Power(_)) => {
+                    gpu_sources.push(format!("{label}_hwmon_power"))
+                }
+                None => {}
+            }
+        }
+        gpu_sources.dedup();
+        let gpu_path = if nvidia_path != GpuEnergyPath::None {
+            nvidia_path
+        } else if other_gpu_j > 0.0 {
+            GpuEnergyPath::PowerIntegration
+        } else {
+            GpuEnergyPath::None
         };
 
         // CPU/DRAM via RAPL
@@ -485,7 +616,22 @@ impl EnergySampler {
             domains_counted.push("dram".to_string());
         }
 
-        let note = build_note(&self.rapl_domains, self.rapl_readable, gpu_path);
+        // Complete only when every card and the processor's package were read.
+        let nvml_reads = nvidia_path != GpuEnergyPath::None;
+        let mut missing_domains = gpu_energy::unmeasurable(&self.cards, nvml_reads);
+        if !cpu_rapl_available {
+            missing_domains.push("cpu_pkg".to_string());
+        }
+        if self.rapl_domains.iter().any(|d| d.kind == RaplKind::Dram) && !dram_rapl_available {
+            missing_domains.push("dram".to_string());
+        }
+        let complete = missing_domains.is_empty();
+        let note = build_note(
+            &self.rapl_domains,
+            self.rapl_readable,
+            gpu_path,
+            &missing_domains,
+        );
 
         // Decode-phase split: energy consumed AFTER the first token. cum_at(t)
         // linearly interpolates the cumulative trace; decode = full - cum_at(t0).
@@ -493,7 +639,7 @@ impl EnergySampler {
             match decode_start_s {
                 Some(t0) if !trace.is_empty() && t0 < duration_s => {
                     let at = cum_at(&trace, t0);
-                    let g = if gpu_path == GpuEnergyPath::NvmlCounter {
+                    let g = if self.traced {
                         Some((gpu_energy_j - at.gpu_j).max(0.0))
                     } else {
                         None
@@ -526,6 +672,9 @@ impl EnergySampler {
             dram_rapl_available,
             domains_counted,
             note,
+            complete,
+            missing_domains,
+            gpu_sources,
             gpu_decode_j,
             cpu_pkg_decode_j,
             dram_decode_j,
@@ -571,27 +720,45 @@ fn cum_at(trace: &[EnergyTrace], t: f64) -> EnergyTrace {
     last
 }
 
-/// Background loop: record cumulative energy deltas (from window start) every
-/// `interval_ms`, reusing one NVML handle. Stops when `stop` is set.
-fn energy_trace_loop(
+/// What the trace loop needs, moved into its thread.
+struct TraceSetup {
     stop: Arc<AtomicBool>,
     trace: Arc<Mutex<Vec<EnergyTrace>>>,
     interval_ms: u64,
     start: Instant,
-    gpu_start_j: f64,
+    gpu_start_j: Option<f64>,
     domains: Vec<RaplDomain>,
     rapl_start: Vec<Option<u128>>,
-) {
+    meters: Vec<gpu_energy::Meter>,
+}
+
+/// Background loop: record cumulative energy deltas (from window start) every
+/// `interval_ms`, reusing one NVML handle. Stops when `stop` is set.
+fn energy_trace_loop(setup: TraceSetup) -> f64 {
+    let TraceSetup {
+        stop,
+        trace,
+        interval_ms,
+        start,
+        gpu_start_j,
+        domains,
+        rapl_start,
+        mut meters,
+    } = setup;
     use nvml_wrapper::Nvml;
     let nvml = Nvml::init().ok();
     let interval = Duration::from_millis(interval_ms.max(20));
     loop {
-        let t_s = start.elapsed().as_secs_f64();
-        let gpu_j = nvml
-            .as_ref()
-            .and_then(nvml_counter_sum_j)
-            .map(|now| (now - gpu_start_j).max(0.0))
-            .unwrap_or(0.0);
+        // Read the stop flag first, so that the sample taken after it was set is the last.
+        let stopping = stop.load(Ordering::Relaxed);
+        let now = Instant::now();
+        let t_s = now.duration_since(start).as_secs_f64();
+        let other_j: f64 = meters.iter_mut().map(|m| m.sample(now)).sum();
+        let nvidia_j = match (gpu_start_j, nvml.as_ref().and_then(nvml_counter_sum_j)) {
+            (Some(g0), Some(now_j)) => (now_j - g0).max(0.0),
+            _ => 0.0,
+        };
+        let gpu_j = nvidia_j + other_j;
         let snap = rapl_snapshot(&domains);
         let (pkg_j, dram_j) = rapl_delta_j(&domains, &rapl_start, &snap);
         if let Ok(mut g) = trace.lock() {
@@ -602,8 +769,8 @@ fn energy_trace_loop(
                 dram_j,
             });
         }
-        if stop.load(Ordering::Relaxed) {
-            break;
+        if stopping {
+            return other_j;
         }
         std::thread::sleep(interval);
     }
@@ -644,6 +811,7 @@ fn build_note(
     domains: &[RaplDomain],
     rapl_readable: bool,
     gpu_path: GpuEnergyPath,
+    missing: &[String],
 ) -> Option<String> {
     let mut parts = Vec::new();
     let have_rapl_files = !domains.is_empty();
@@ -672,9 +840,16 @@ fn build_note(
     }
     match gpu_path {
         GpuEnergyPath::None => parts.push("GPU energy unavailable (no NVML/GPU)".to_string()),
-        GpuEnergyPath::PowerIntegration => parts
-            .push("GPU energy via power.draw integration (NVML energy counter absent)".to_string()),
+        GpuEnergyPath::PowerIntegration => {
+            parts.push("GPU energy integrated from a power reading, not a counter".to_string())
+        }
         GpuEnergyPath::NvmlCounter => {}
+    }
+    if !missing.is_empty() {
+        parts.push(format!(
+            "energy figures withheld: {} could not be read",
+            missing.join(", ")
+        ));
     }
     if parts.is_empty() {
         None
@@ -734,6 +909,9 @@ mod tests {
             dram_rapl_available: false,
             domains_counted: vec!["gpu".into(), "cpu_pkg".into()],
             note: None,
+            complete: true,
+            missing_domains: vec![],
+            gpu_sources: vec![],
             gpu_decode_j: None,
             cpu_pkg_decode_j: None,
             dram_decode_j: None,
@@ -765,6 +943,9 @@ mod tests {
             dram_rapl_available: false,
             domains_counted: vec!["gpu".into(), "cpu_pkg".into()],
             note: None,
+            complete: true,
+            missing_domains: vec![],
+            gpu_sources: vec![],
             gpu_decode_j: Some(20.0),
             cpu_pkg_decode_j: Some(4.0),
             dram_decode_j: None,
@@ -812,6 +993,9 @@ mod tests {
             dram_rapl_available: false,
             domains_counted: vec![],
             note: None,
+            complete: false,
+            missing_domains: vec!["cpu_pkg".into()],
+            gpu_sources: vec![],
             gpu_decode_j: None,
             cpu_pkg_decode_j: None,
             dram_decode_j: None,
@@ -824,6 +1008,88 @@ mod tests {
             ..w
         };
         assert!(w2.j_per_tok(0).is_none());
+    }
+
+    fn window_with(complete: bool) -> EnergyWindow {
+        EnergyWindow {
+            gpu_energy_j: 4.0,
+            cpu_pkg_energy_j: 0.0,
+            dram_energy_j: 0.0,
+            energy_j: 4.0,
+            duration_s: 1.0,
+            gpu_path: GpuEnergyPath::NvmlCounter,
+            cpu_rapl_available: complete,
+            dram_rapl_available: false,
+            domains_counted: vec!["gpu".into()],
+            note: None,
+            complete,
+            missing_domains: if complete {
+                vec![]
+            } else {
+                vec!["cpu_pkg".into(), "card0".into()]
+            },
+            gpu_sources: vec!["nvml_counter".into()],
+            gpu_decode_j: Some(1.0),
+            cpu_pkg_decode_j: None,
+            dram_decode_j: None,
+            decode_energy_j: Some(1.0),
+            decode_duration_s: Some(0.5),
+        }
+    }
+
+    /// A window that left out a domain of the machine keeps no energy figure at all: the few
+    /// joules of one card read beside the card that did the work are not a result.
+    #[test]
+    fn an_incomplete_window_stores_no_energy_figure_and_names_what_is_missing() {
+        let w = window_with(false);
+        assert!(w.j_per_tok(128).is_none());
+        assert!(w.j_per_decode_tok(128).is_none());
+        assert!(w.wh_per_tok(128).is_none());
+        let json = w.to_json(128, 50.0);
+        assert_eq!(json["complete"], false);
+        for key in [
+            "energy_j",
+            "gpu_energy_j",
+            "cpu_pkg_energy_j",
+            "dram_energy_j",
+            "j_per_tok",
+            "gco2_per_tok",
+            "decode_energy_j",
+            "gpu_decode_j",
+            "j_per_decode_tok",
+        ] {
+            assert!(json[key].is_null(), "{key} must be null, is {}", json[key]);
+        }
+        assert_eq!(
+            json["missing_domains"],
+            serde_json::json!(["cpu_pkg", "card0"])
+        );
+        assert!(w.idle_json()["energy_j"].is_null());
+        assert!(w.idle_json()["idle_watts"].is_null());
+    }
+
+    #[test]
+    fn a_complete_window_stores_its_figures() {
+        let w = window_with(true);
+        let json = w.to_json(4, 50.0);
+        assert_eq!(json["complete"], true);
+        assert_eq!(json["energy_j"], 4.0);
+        assert_eq!(json["j_per_tok"], 1.0);
+        assert_eq!(json["gpu_sources"], serde_json::json!(["nvml_counter"]));
+        assert_eq!(w.idle_json()["idle_watts"], 4.0);
+    }
+
+    #[test]
+    fn the_note_says_why_the_figures_are_withheld() {
+        let note = build_note(
+            &[],
+            false,
+            GpuEnergyPath::NvmlCounter,
+            &["card0".to_string()],
+        )
+        .unwrap();
+        assert!(note.contains("withheld"), "{note}");
+        assert!(note.contains("card0"), "{note}");
     }
 
     #[test]

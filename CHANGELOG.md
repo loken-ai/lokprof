@@ -5,6 +5,14 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Energy: measure the AMD cards and say how each card was read.
+
+### Changed
+
+- Energy: leave the figures null and name what was not read.
+
 ### Removed
 
 - Scripts: move the fair-run harness, the card policy and the record store to the benchmarks repository.

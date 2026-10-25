@@ -27,18 +27,22 @@ difference between engines hides:
   equivalent if one of them draws half again as much.
 
   Read the joules for what they are: **the machine's draw over the request window, not the
-  engine's**. NVML sums every card present, RAPL returns whole CPU packages - operating
-  system, this process and its own samplers included - and the idle floor is never subtracted,
-  so part of every figure is `idle_power / throughput` and a slower engine is charged for
-  occupying the machine longer. That is a defensible whole-system measurement **on an
-  otherwise idle machine**, and meaningless on a box doing anything else. `--idle-energy-secs`
-  records the idle floor in the JSON so you can subtract it yourself.
+  engine's**. Every card present is counted - NVIDIA through NVML, AMD through the power its
+  driver publishes in hwmon, integrated over the window (an estimate, labelled so) - and so is
+  the processor's package, from RAPL, which includes the operating system, this process and its
+  own samplers. The idle floor is never subtracted, so part of every figure is
+  `idle_power / throughput` and a slower engine is charged for occupying the machine longer.
+  That is a defensible whole-system measurement **on an otherwise idle machine**, and
+  meaningless on a box doing anything else. `--idle-energy-secs` records the idle floor in the
+  JSON so you can subtract it yourself.
 
-  Coverage differs by platform, and the reported labels say which domains are counted:
-  CPU and DRAM energy come from Linux's powercap interface, so a run elsewhere - Windows
-  included - counts **the GPU alone** and its J/token is mechanically lower. The same counters
-  exist on other platforms but live in MSRs that only a kernel driver can read, and a
-  benchmark has no business installing one.
+  **A window is stored only when it is complete.** If a card or the processor's package cannot
+  be read - RAPL is readable by root only until the machine allows it, a card has no power
+  reading, the platform has no RAPL - every energy figure of the window is `null`,
+  `missing_domains` names what could not be read, and `note` says why. A total that leaves a
+  domain out is not a smaller measurement of the same thing: the energy of an AMD card taken
+  from an idle NVIDIA card beside it came out at a few joules for a request. The benchmarks
+  repository carries `scripts/enable-energy.sh`, which opens the processor's counters on Linux.
 - **the engines are made comparable before they are compared.** Which cards each engine may
   use is decided once, at launch, and applied to all of them, by the campaign in the
   [benchmarks](https://github.com/loken-ai/benchmarks) repository.
