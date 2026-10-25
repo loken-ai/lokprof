@@ -1,6 +1,6 @@
 [package]
 name = "lokprof"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Benchmark a local inference server against another, on the same prompts and the same clock"
 repository = "https://github.com/loken-ai/lokprof"
