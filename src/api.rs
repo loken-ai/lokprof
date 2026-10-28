@@ -13,6 +13,10 @@ use std::time::{Duration, Instant};
 /// streamed answer is judged on the same text as a non-streamed one.
 const COHERENCE_TEXT_CAP: usize = 64 * 1024;
 
+/// Bytes of a refused stream's body kept as the reason of the failure: an error message, not
+/// a page.
+const STATUS_BODY_BYTES: u64 = 2048;
+
 /// Which wire protocol a target server speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
@@ -1199,8 +1203,8 @@ impl BenchClient {
                 sock.flush().ok();
 
                 let mut reader = BufReader::new(sock);
-                // Skip HTTP response headers (up to the blank line); capture status.
-                let mut status_ok = None;
+                // Skip HTTP response headers (up to the blank line); capture the status code.
+                let mut status: Option<String> = None;
                 let mut hl = String::new();
                 loop {
                     hl.clear();
@@ -1208,16 +1212,24 @@ impl BenchClient {
                     if n == 0 {
                         return Err("connection closed during headers".to_string());
                     }
-                    if status_ok.is_none() {
+                    if status.is_none() {
                         // "HTTP/1.1 200 OK"
-                        status_ok = Some(hl.split(' ').nth(1) == Some("200"));
+                        status = Some(hl.split(' ').nth(1).unwrap_or("?").to_string());
                     }
                     if hl.trim_end().is_empty() {
                         break;
                     }
                 }
-                if status_ok != Some(true) {
-                    return Err(format!("stream HTTP status not 200 ({})", status_ok.map_or("?", |_| "non-200")));
+                if status.as_deref() != Some("200") {
+                    // The engine's reason travels in the body: it is recorded with the status.
+                    use std::io::Read;
+                    let mut body = String::new();
+                    let _ = reader.take(STATUS_BODY_BYTES).read_to_string(&mut body);
+                    return Err(format!(
+                        "stream HTTP status {}: {}",
+                        status.as_deref().unwrap_or("?"),
+                        body.trim()
+                    ));
                 }
 
                 let mut first_chunk_time: Option<f64> = None;

@@ -5,6 +5,10 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Streaming: record the status and the reason of a refused request.
+
 ## [0.4.0] - 2026-10-26
 
 ### Added
