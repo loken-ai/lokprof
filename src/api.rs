@@ -487,9 +487,16 @@ pub struct BenchClient {
 }
 
 impl BenchClient {
-    pub fn with_protocol(base_url: String, verbose: bool, protocol: Protocol) -> Self {
+    /// A client of the engine at `base_url`.
+    /// A request that takes longer than `timeout` is given up.
+    pub fn with_protocol(
+        base_url: String,
+        verbose: bool,
+        protocol: Protocol,
+        timeout: Duration,
+    ) -> Self {
         let http = HttpClient::builder()
-            .timeout(Duration::from_secs(600)) // 10 min global timeout
+            .timeout(timeout)
             .tcp_nodelay(true) // deliver each streamed token promptly, no Nagle batching
             .build()
             .expect("Failed to create HTTP client");
@@ -952,7 +959,6 @@ impl BenchClient {
             .http
             .post(&url)
             .json(&req)
-            .timeout(Duration::from_secs(600))
             .send()
             .await
             .map_err(|e| format!("Load request failed: {}", e))?;

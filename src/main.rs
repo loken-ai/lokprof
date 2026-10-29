@@ -168,6 +168,11 @@ struct Args {
     #[arg(long)]
     num_gpu: Option<usize>,
 
+    /// Seconds a request to an engine may take before it is given up.
+    /// A campaign passes its own limit here.
+    #[arg(long, default_value_t = 600)]
+    request_timeout: u64,
+
     /// Comma-separated list of prompt names. Text suite: short, medium, long
     /// (the default). Vision suite: vision_short, vision_medium, vision_long -
     /// require --image to be passed too.
@@ -507,7 +512,12 @@ async fn main() {
     let clients: Vec<BenchClient> = targets
         .iter()
         .map(|t| {
-            let mut c = BenchClient::with_protocol(t.url.clone(), args.verbose, t.protocol);
+            let mut c = BenchClient::with_protocol(
+                t.url.clone(),
+                args.verbose,
+                t.protocol,
+                Duration::from_secs(args.request_timeout),
+            );
             c.set_num_gpu(args.num_gpu);
             c
         })
