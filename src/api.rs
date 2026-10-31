@@ -473,6 +473,9 @@ pub struct IterationMetrics {
     pub first_token_wall_ms: Option<f64>,
 }
 
+/// How long the engine keeps the model loaded after a request.
+pub const KEEP_ALIVE: &str = "30m";
+
 /// HTTP client for benchmarking
 pub struct BenchClient {
     base_url: String,
@@ -949,7 +952,7 @@ impl BenchClient {
             prompt: String::new(),
             stream: false,
             options: None,
-            keep_alive: Some("30m".to_string()),
+            keep_alive: Some(KEEP_ALIVE.to_string()),
             images: None,
             think: None,
             thinking: None,
@@ -1047,7 +1050,7 @@ impl BenchClient {
                 session_id,
                 self.num_gpu,
             )),
-            keep_alive: Some("30m".to_string()),
+            keep_alive: Some(KEEP_ALIVE.to_string()),
             images: images.map(<[String]>::to_vec),
             think: Some(false),
             thinking: Some(false),
@@ -1170,7 +1173,7 @@ impl BenchClient {
                 session_id,
                 self.num_gpu,
             )),
-            keep_alive: Some("30m".to_string()),
+            keep_alive: Some(KEEP_ALIVE.to_string()),
             images: images.map(<[String]>::to_vec),
             think: Some(false),
             thinking: Some(false),

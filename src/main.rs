@@ -355,6 +355,9 @@ struct CellResult<'a> {
     /// What each iteration that kept nothing said: a request the bench gave up on, one the
     /// engine refused. Kept so a cell with no rate still says what happened to it.
     iteration_errors: Vec<String>,
+    /// The settings the bench chose for the modality.
+    /// The record holds them.
+    settings: serde_json::Value,
 }
 
 #[tokio::main]
@@ -851,6 +854,7 @@ async fn main() {
                                 coherence_pass: None,
                                 load_error: Some("asr modality requires --audio".to_string()),
                                 iteration_errors: Vec::new(),
+                                settings: serde_json::Value::Null,
                             },
                         },
                         // Text and vision keep the token path (vision rides it with an attached
@@ -1595,6 +1599,7 @@ async fn run_cell<'a>(
         coherence_pass,
         load_error: None,
         iteration_errors,
+        settings: serde_json::json!({ "keep_alive": api::KEEP_ALIVE }),
     }
 }
 
@@ -1715,6 +1720,7 @@ async fn run_image_cell<'a>(
         coherence_pass,
         load_error,
         iteration_errors: errors,
+        settings: serde_json::json!({ "size": [SIZE.0, SIZE.1], "seed": SEED }),
     }
 }
 
@@ -1820,6 +1826,7 @@ async fn run_music_cell<'a>(
         coherence_pass,
         load_error,
         iteration_errors: errors,
+        settings: serde_json::json!({ "seconds": SECONDS }),
     }
 }
 
@@ -1924,6 +1931,7 @@ async fn run_tts_cell<'a>(
         coherence_pass,
         load_error,
         iteration_errors: errors,
+        settings: serde_json::json!({ "voice": VOICE }),
     }
 }
 
@@ -2035,6 +2043,7 @@ async fn run_asr_cell<'a>(
         coherence_pass,
         load_error,
         iteration_errors: errors,
+        settings: serde_json::Value::Null,
     }
 }
 
@@ -2067,6 +2076,7 @@ fn unloadable_cells<'a>(
                 coherence_pass: None,
                 load_error: Some(reason.to_string()),
                 iteration_errors: Vec::new(),
+                settings: serde_json::Value::Null,
             })
         })
         .collect()
@@ -2271,6 +2281,7 @@ fn save_json(
                 "coherence_pass": c.coherence_pass,
                 "load_error": c.load_error,
                 "iteration_errors": c.iteration_errors,
+                "settings": c.settings,
                 "stats": serde_json::Value::Object(stats_map),
                 "iterations": iterations_json,
             })

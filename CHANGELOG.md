@@ -8,6 +8,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Requests: give up a request after --request-timeout seconds, 600 by default.
+- Records: hold the settings the bench chose for the kind of model.
 
 ### Fixed
 
