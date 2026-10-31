@@ -16,6 +16,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Streaming: refuse an https address.
 - Flights: record a failed request in the errors of the cell.
 - Flights: leave a missing token count out of the total, not as 0.
+- Warm-up: report a failed warm-up request for every kind of model.
 
 ## [0.4.1] - 2026-10-28
 

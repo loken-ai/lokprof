@@ -1634,13 +1634,16 @@ async fn run_image_cell<'a>(
         "  [{}] Image generation, {} iteration(s)...",
         target.label, iterations
     );
+    let mut errors = Vec::new();
     for _ in 0..warmup {
-        let _ = client.generate_image(model, prompt, SIZE, SEED).await;
+        if let Err(e) = client.generate_image(model, prompt, SIZE, SEED).await {
+            println!("    warm-up failed: {e}");
+            errors.push(format!("warm-up: {e}"));
+        }
     }
     let mut latencies = Vec::new();
     let mut mpps = Vec::new();
     let mut digests = Vec::new();
-    let mut errors = Vec::new();
     let mut preview: Option<String> = None;
     for i in 0..iterations {
         match client.generate_image(model, prompt, SIZE, SEED).await {
@@ -1736,13 +1739,16 @@ async fn run_music_cell<'a>(
         "  [{}] Text-to-music ({SECONDS:.0}s clip), {} iteration(s)...",
         target.label, iterations
     );
+    let mut errors = Vec::new();
     for _ in 0..warmup {
-        let _ = client.generate_music(model, prompt, SECONDS).await;
+        if let Err(e) = client.generate_music(model, prompt, SECONDS).await {
+            println!("    warm-up failed: {e}");
+            errors.push(format!("warm-up: {e}"));
+        }
     }
     let mut latencies = Vec::new();
     let mut rtfs = Vec::new();
     let mut audio_s = Vec::new();
-    let mut errors = Vec::new();
     let mut preview: Option<String> = None;
     for i in 0..iterations {
         match client.generate_music(model, prompt, SECONDS).await {
@@ -1837,13 +1843,16 @@ async fn run_tts_cell<'a>(
         "  [{}] Text-to-speech, {} iteration(s)...",
         target.label, iterations
     );
+    let mut errors = Vec::new();
     for _ in 0..warmup {
-        let _ = client.generate_tts(model, prompt, VOICE).await;
+        if let Err(e) = client.generate_tts(model, prompt, VOICE).await {
+            println!("    warm-up failed: {e}");
+            errors.push(format!("warm-up: {e}"));
+        }
     }
     let mut latencies = Vec::new();
     let mut rtfs = Vec::new();
     let mut audio_s = Vec::new();
-    let mut errors = Vec::new();
     let mut preview: Option<String> = None;
     for i in 0..iterations {
         match client.generate_tts(model, prompt, VOICE).await {
@@ -1939,14 +1948,17 @@ async fn run_asr_cell<'a>(
         "  [{}] Speech recognition, {} iteration(s)...",
         target.label, iterations
     );
+    let mut errors = Vec::new();
     for _ in 0..warmup {
-        let _ = client.generate_asr(model, audio, "audio.wav").await;
+        if let Err(e) = client.generate_asr(model, audio, "audio.wav").await {
+            println!("    warm-up failed: {e}");
+            errors.push(format!("warm-up: {e}"));
+        }
     }
     let mut latencies = Vec::new();
     let mut rtfs = Vec::new();
     let mut audio_secs = Vec::new();
     let mut wers = Vec::new();
-    let mut errors = Vec::new();
     let mut preview: Option<String> = None;
     for i in 0..iterations {
         match client.generate_asr(model, audio, "audio.wav").await {
