@@ -484,6 +484,9 @@ pub struct BenchClient {
     /// the other engines are put on the CPU by how they were launched. Setting it without
     /// doing the same to them measures one engine on a CPU against another on a GPU.
     num_gpu: Option<usize>,
+    /// How long a request is waited on.
+    /// It is also how long a silent stream is waited on.
+    timeout: Duration,
 }
 
 impl BenchClient {
@@ -506,6 +509,7 @@ impl BenchClient {
             verbose,
             protocol,
             num_gpu: None,
+            timeout,
         }
     }
 
@@ -1182,12 +1186,15 @@ impl BenchClient {
         // done line (and thus the server's eval_count/eval_duration, which drives
         // the decode rate) without depending on hyper's chunk-boundary handling,
         // and reads the per-token timestamps used for the ITL diagnostics.
+        if self.base_url.starts_with("https://") {
+            return Err("the streaming client speaks plain http, not https".to_string());
+        }
         let host_port = self
             .base_url
             .trim_end_matches('/')
             .trim_start_matches("http://")
-            .trim_start_matches("https://")
             .to_string();
+        let silence = self.timeout;
         let body_bytes = serde_json::to_vec(&req).map_err(|e| format!("serialize: {}", e))?;
         let max_tok = max_tokens;
         let (first_chunk_time, last_done_line, token_count, token_times_ms, text_acc, wall_ms) =
@@ -1198,6 +1205,8 @@ impl BenchClient {
                 let mut sock = TcpStream::connect(&host_port)
                     .map_err(|e| format!("connect {host_port}: {e}"))?;
                 sock.set_nodelay(true).ok();
+                sock.set_read_timeout(Some(silence)).ok();
+                sock.set_write_timeout(Some(silence)).ok();
                 // Minimal HTTP/1.1 request. `Connection: close` keeps the framing
                 // simple; we stop reading at the done line regardless.
                 let head = format!(
@@ -1257,15 +1266,16 @@ impl BenchClient {
                         continue;
                     }
                     let now = start.elapsed().as_secs_f64() * 1000.0;
-                    if first_chunk_time.is_none() {
-                        first_chunk_time = Some(now);
-                    }
                     // Content first: a chunk carrying response/thinking text is a
                     // token even if that text contains `"done":true`. The terminal
                     // stats line always has an EMPTY response -> done branch.
                     if has_nonempty_field(l, "\"response\":\"")
                         || has_nonempty_field(l, "\"thinking\":\"")
                     {
+                        // The first token is the first text.
+                        if first_chunk_time.is_none() {
+                            first_chunk_time = Some(now);
+                        }
                         token_count += 1;
                         token_times_ms.push(now);
                         if text_acc.len() < COHERENCE_TEXT_CAP {
@@ -1721,5 +1731,83 @@ mod image_tests {
         let m2 = asr_metrics_from("x".to_string(), 1000.0, b"not a wav", None);
         assert_eq!(m2.wer, None);
         assert_eq!(m2.audio_seconds, 0.0);
+    }
+
+    /// A one-shot HTTP server on a free port.
+    /// The connection gets `script` written to it, a piece at a time with `pause` between them.
+    /// The connection then stays open for `hold`.
+    fn serve_once(script: Vec<&'static str>, pause: Duration, hold: Duration) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let Ok((mut sock, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf);
+            for piece in script {
+                let _ = sock.write_all(piece.as_bytes());
+                let _ = sock.flush();
+                std::thread::sleep(pause);
+            }
+            std::thread::sleep(hold);
+        });
+        format!("http://{addr}")
+    }
+
+    /// The first token is the first text.
+    /// A stream line with no text does not start the clock.
+    #[tokio::test]
+    async fn the_first_token_time_starts_at_the_first_text() {
+        let url = serve_once(
+            vec![
+                "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n\r\n",
+                "{\"response\":\"\",\"done\":false}\n",
+                "{\"response\":\"hi\",\"done\":false}\n",
+                "{\"response\":\"\",\"done\":true,\"eval_count\":1,\"eval_duration\":1000000}\n",
+            ],
+            Duration::from_millis(300),
+            Duration::from_millis(0),
+        );
+        let client =
+            BenchClient::with_protocol(url, false, Protocol::Ollama, Duration::from_secs(10));
+        let m = client
+            .generate_stream("m", "p", 8, None, None, None)
+            .await
+            .expect("the stream ends on its done line");
+        assert!(
+            m.first_token_wall_ms.unwrap_or(0.0) >= 500.0,
+            "first token at {:?} ms, after the empty line and the first pause",
+            m.first_token_wall_ms
+        );
+    }
+
+    /// A stream that goes silent is given up after the timeout of the client.
+    /// An https address is refused.
+    #[tokio::test]
+    async fn a_silent_stream_times_out_and_https_is_refused() {
+        let url = serve_once(
+            vec!["HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n\r\n"],
+            Duration::from_millis(0),
+            Duration::from_secs(30),
+        );
+        let client =
+            BenchClient::with_protocol(url, false, Protocol::Ollama, Duration::from_millis(400));
+        let started = Instant::now();
+        let r = client.generate_stream("m", "p", 8, None, None, None).await;
+        assert!(r.is_err(), "a silent stream is an error");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "and it ends at the timeout"
+        );
+        let tls = BenchClient::with_protocol(
+            "https://127.0.0.1:1".to_string(),
+            false,
+            Protocol::Ollama,
+            Duration::from_secs(1),
+        );
+        let r = tls.generate_stream("m", "p", 8, None, None, None).await;
+        assert!(r.unwrap_err().contains("https"));
     }
 }

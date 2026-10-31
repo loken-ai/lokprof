@@ -9,6 +9,12 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 - Requests: give up a request after --request-timeout seconds, 600 by default.
 
+### Fixed
+
+- Streaming: start the first-token time at the first text, as on the other engines.
+- Streaming: give up a silent stream after the request timeout.
+- Streaming: refuse an https address.
+
 ## [0.4.1] - 2026-10-28
 
 ### Changed
