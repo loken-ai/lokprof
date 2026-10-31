@@ -1213,11 +1213,12 @@ async fn run_cell<'a>(
             let wall_s = t0.elapsed().as_secs_f64();
             let mut served = 0usize;
             let mut tokens = 0u64;
+            let mut uncounted = 0usize;
             for r in results {
                 match r {
                     Ok(m) => {
                         served += 1;
-                        tokens += m.tokens_generated.unwrap_or(0);
+                        add_known_tokens(&mut tokens, &mut uncounted, m.tokens_generated);
                         all_metrics.push(m);
                         all_gpu_samples.push(Vec::new());
                         all_host_samples.push(None);
@@ -1226,7 +1227,10 @@ async fn run_cell<'a>(
                     // A failure is reported and not counted: a flight that served fewer
                     // requests in the same wall time would otherwise read as a slower engine
                     // rather than as a broken one.
-                    Err(e) => println!("    [{}] flight request failed: {e}", target.label),
+                    Err(e) => {
+                        println!("    [{}] flight request failed: {e}", target.label);
+                        iteration_errors.push(format!("flight {}: {e}", f + 1));
+                    }
                 }
             }
             println!(
@@ -1240,6 +1244,14 @@ async fn run_cell<'a>(
                 wall_s,
                 tokens as f64 / wall_s.max(1e-9)
             );
+            if uncounted > 0 {
+                println!(
+                    "    [{}] flight {}/{}: {uncounted} served without a token count, left out of the total",
+                    target.label,
+                    f + 1,
+                    flights
+                );
+            }
         }
     }
 
@@ -1320,13 +1332,13 @@ async fn run_cell<'a>(
                     .ttft_ms
                     .map(|t| format!("{:.0}ms", t))
                     .unwrap_or("?".into());
-                let tokens = metrics.tokens_generated.unwrap_or(0);
                 // Show content tokens alongside total when they differ (template-leak warning).
-                let tokens_str = match metrics.content_tokens {
-                    Some(c) if c != tokens => {
+                let tokens_str = match (metrics.tokens_generated, metrics.content_tokens) {
+                    (None, _) => "?".to_string(),
+                    (Some(tokens), Some(c)) if c != tokens => {
                         format!("{}={}+{}tpl", tokens, c, tokens.saturating_sub(c))
                     }
-                    _ => format!("{}", tokens),
+                    (Some(tokens), _) => format!("{}", tokens),
                 };
                 let itl_str = format_itl_summary(&metrics.inter_token_latencies_ms);
                 println!(
@@ -2049,6 +2061,15 @@ fn unloadable_cells<'a>(
 }
 
 /// Compact ITL summary for inline reporting (P50, P95).
+/// Adds `count` to `total` when the engine gave one.
+/// Counts it in `unknown` when it did not.
+fn add_known_tokens(total: &mut u64, unknown: &mut usize, count: Option<u64>) {
+    match count {
+        Some(n) => *total += n,
+        None => *unknown += 1,
+    }
+}
+
 fn format_itl_summary(itl: &[f64]) -> String {
     if itl.is_empty() {
         return "-".into();
@@ -2375,9 +2396,19 @@ fn normalize_url(input: &str) -> String {
 
 #[cfg(test)]
 mod pairing_tests {
-    use super::per_token;
+    use super::{add_known_tokens, per_token};
     use crate::api::IterationMetrics;
     use crate::energy::{EnergyWindow, GpuEnergyPath};
+
+    /// A missing token count is left out of a total and counted apart.
+    #[test]
+    fn a_missing_token_count_is_left_out_of_the_total() {
+        let (mut total, mut unknown) = (0u64, 0usize);
+        add_known_tokens(&mut total, &mut unknown, Some(128));
+        add_known_tokens(&mut total, &mut unknown, None);
+        add_known_tokens(&mut total, &mut unknown, Some(2));
+        assert_eq!((total, unknown), (130, 1));
+    }
 
     fn window(joules: f64) -> Option<EnergyWindow> {
         Some(EnergyWindow {
