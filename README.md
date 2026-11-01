@@ -1,75 +1,49 @@
 # lokprof
 
-Benchmark a local inference server against another one, on the same prompts and the same
-clock. It drives [Ollama](https://ollama.com), [LOKEN](https://github.com/loken-ai/loken)
-and vLLM through their own APIs, sweeps models, context lengths and prompt sizes, and reports
-what each of them actually did rather than what it claims.
+A command line profiler that measures inference servers on the same prompts and the same clock.
+It drives Ollama, [loken](https://github.com/loken-ai/loken) and vLLM through their own APIs, sweeps models, context lengths and prompts, and records what each server did.  
+Prefill and decode are timed apart, and the energy of the machine is measured over every request.
 
 ```sh
-lokprof --ollama http://localhost:11434 --loken http://localhost:11435 \
-      --models qwen3:latest --num-ctx 4096 --prompts short,medium,long --stream
+cargo build --release
+target/release/lokprof --ollama 11434 --loken 11435 \
+    --models qwen3:0.6b --prompts short,medium,long --stream -o run.json
 ```
 
-`--stream` is not optional if you intend to compare decode rates. Without it no engine can
-report a client-observed first-token time, so the figure becomes tokens over the whole
-wall clock - prefill included - for everyone, and the prefill/decode energy split does not
-happen at all.
+`--stream` gives each engine a client-observed time to first token and a decode rate.  
+Without it, every rate is tokens over the whole request, prefill included.
 
-## What it measures, and why it is fussy about it
+## State
 
-A benchmark that is easy to run is easy to run wrong, so this one is opinionated where the
-difference between engines hides:
+| What | State |
+|---|---|
+| Version | 0.4.1 |
+| Install | build from source with `cargo`, no prebuilt archive |
+| Text sweeps | Ollama, loken and vLLM |
+| Vision sweeps | Ollama and loken |
+| Image, speech, music and transcription | through the OpenAI routes of the server |
+| Energy of the cards | NVIDIA through NVML, AMD and discrete Intel cards through hwmon |
+| Energy of the processor | Linux only, from RAPL |
 
-- **prefill and decode are separated.** A single tokens-per-second figure conflates the two,
-  and they do not move together - one engine can win the decode and lose the request.
-- **energy, not only speed.** GPU and host samplers run alongside the request, so a result
-  carries joules per token beside tokens per second. Two engines at the same rate are not
-  equivalent if one of them draws half again as much.
+## Documentation
 
-  Read the joules for what they are: **the machine's draw over the request window, not the
-  engine's**. Every card present is counted - NVIDIA through NVML, AMD through the power its
-  driver publishes in hwmon, integrated over the window (an estimate, labelled so) - and so is
-  the processor's package, from RAPL, which includes the operating system, this process and its
-  own samplers. The idle floor is never subtracted, so part of every figure is
-  `idle_power / throughput` and a slower engine is charged for occupying the machine longer.
-  That is a defensible whole-system measurement **on an otherwise idle machine**, and
-  meaningless on a box doing anything else. `--idle-energy-secs` records the idle floor in the
-  JSON so you can subtract it yourself.
+| Page | Read it to |
+|---|---|
+| [Overview](docs/start/overview.md) | See what lokprof measures and what it records |
+| [Install](docs/start/install.md) | Build lokprof |
+| [First run](docs/start/first-run.md) | Measure 1 server and save a record |
+| [Concepts](docs/start/concepts.md) | Learn the terms: target, cell, sweep, window |
+| [Guides](docs/guides/compare-engines.md) | Do 1 task: compare servers, measure energy, vision, media, concurrency, a baseline |
+| [Options](docs/reference/options.md) | Look up a command line option and its default |
+| [Record](docs/reference/record.md) | Read the JSON record and the CSV file |
 
-  **A window is stored only when it is complete.** If a card or the processor's package cannot
-  be read - RAPL is readable by root only until the machine allows it, a card has no power
-  reading, the platform has no RAPL - every energy figure of the window is `null`,
-  `missing_domains` names what could not be read, and `note` says why. A total that leaves a
-  domain out is not a smaller measurement of the same thing: the energy of an AMD card taken
-  from an idle NVIDIA card beside it came out at a few joules for a request. The benchmarks
-  repository carries `scripts/enable-energy.sh`, which opens the processor's counters on Linux.
-- **the engines are made comparable before they are compared.** Which cards each engine may
-  use is decided once, at launch, and applied to all of them, by the campaign in the
-  [benchmarks](https://github.com/loken-ai/benchmarks) repository.
-  Restricting one engine to a card while the others keep the machine is the easiest way to
-  publish a fiction, and it is what a per-request pin quietly does. `--num-gpu 0` remains for
-  the CPU-to-CPU cell, where the other engines are launched CPU-only alongside it.
-- **vision suites** exist beside the text ones, because an image prompt exercises a different
-  path and a text-only sweep says nothing about it.
+A fair comparison between engines also needs a protocol: one engine at a time, the same cards, a thermal gate.
+The [benchmarks](https://github.com/loken-ai/benchmarks) repository runs that campaign with lokprof and publishes the results.
 
-## Reproducing a fair run
+## Contributing
 
-The tool measures; making the measurement mean something is the campaign's job, and it lives in
-the [benchmarks](https://github.com/loken-ai/benchmarks) repository: one engine at a time with the others' processes stopped,
-the same cards for every engine, cold restarts, warm-up discarded, greedy decoding and a thermal
-gate. It drives this tool, and anyone can run it and share the runs there. Most of what the
-campaign does exists because a run without it produced a figure that was wrong in a way nobody
-noticed.
-
-## Build
-
-```sh
-cargo build --release      # target/release/lokprof
-```
-
-No GPU or model is needed to build it. The GPU sampler reads NVML at run time when a card is
-present and reports nothing when it is not.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers the build, the checks and the layout of the repository.
 
 ## Licence
 
-MIT OR Apache-2.0, at your option. See `LICENSE-MIT` and `LICENSE-APACHE`.
+MIT OR Apache-2.0, at your option.
