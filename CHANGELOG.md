@@ -5,6 +5,8 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-02
+
 ### Added
 
 - Requests: give up a request after --request-timeout seconds, 600 by default.
