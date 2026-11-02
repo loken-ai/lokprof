@@ -53,6 +53,9 @@ pub enum Modality {
     /// Same audio clock as TTS - latency and the real-time factor - but the reply is a JSON
     /// envelope with a base64 WAV, like image generation, not raw bytes.
     Music,
+    /// Text in, one vector out (`/v1/embeddings`): latency, input tokens per second and the
+    /// width of the vector.
+    Embedding,
 }
 
 /// What one image-generation request measured: how long it took, the image it produced, and a
@@ -178,6 +181,62 @@ pub fn tts_metrics_from(audio: &[u8], wall_clock_ms: f64) -> Result<AudioMetrics
         audio_seconds,
         real_time_factor,
         bytes: audio.len(),
+    })
+}
+
+/// What one embedding request measured: how long it took, the input tokens the server counted,
+/// and the vector it returned. The vector is judged on its shape and its norm, which is what a
+/// broken model gets wrong first: an empty, non-finite or all-zero vector.
+#[derive(Debug, Clone)]
+pub struct EmbedMetrics {
+    pub wall_clock_ms: f64,
+    /// Width of the returned vector.
+    pub dims: usize,
+    /// Input tokens the server reports, when it reports them.
+    pub prompt_tokens: Option<u64>,
+    /// Input tokens per second of wall time; `None` without a token count.
+    pub tokens_per_s: Option<f64>,
+    /// Euclidean norm of the vector.
+    pub norm: f64,
+}
+
+/// Turn a `/v1/embeddings` reply and the wall time it took into metrics. Separate from the
+/// request so it is tested without a server.
+pub fn embed_metrics_from(
+    reply: &serde_json::Value,
+    wall_clock_ms: f64,
+) -> Result<EmbedMetrics, String> {
+    let vector = reply["data"][0]["embedding"]
+        .as_array()
+        .ok_or_else(|| "reply carries no data[0].embedding".to_string())?;
+    if vector.is_empty() {
+        return Err("the vector is empty".to_string());
+    }
+    let mut sum = 0.0f64;
+    for v in vector {
+        let x = v
+            .as_f64()
+            .ok_or_else(|| "the vector holds a non-number".to_string())?;
+        if !x.is_finite() {
+            return Err("the vector holds a non-finite value".to_string());
+        }
+        sum += x * x;
+    }
+    let norm = sum.sqrt();
+    if norm == 0.0 {
+        return Err("the vector is all zeros".to_string());
+    }
+    let prompt_tokens = reply["usage"]["prompt_tokens"].as_u64();
+    let wall_s = wall_clock_ms / 1000.0;
+    let tokens_per_s = prompt_tokens
+        .filter(|_| wall_s > 0.0)
+        .map(|t| t as f64 / wall_s);
+    Ok(EmbedMetrics {
+        wall_clock_ms,
+        dims: vector.len(),
+        prompt_tokens,
+        tokens_per_s,
+        norm,
     })
 }
 
@@ -600,6 +659,39 @@ impl BenchClient {
         tts_metrics_from(&audio, wall_clock_ms)
     }
 
+    /// Embed `input` and time it end to end (`POST /v1/embeddings`, the OpenAI dialect every
+    /// engine in the bench serves). Returns the width and norm of the vector and the input
+    /// tokens per second.
+    pub async fn generate_embedding(
+        &self,
+        model: &str,
+        input: &str,
+    ) -> Result<EmbedMetrics, String> {
+        let url = format!("{}/v1/embeddings", self.base_url);
+        let body = serde_json::json!({ "model": model, "input": input });
+        self.log_request("POST", &url, &body);
+        let t0 = Instant::now();
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("embedding request: {e}"))?;
+        let status = resp.status();
+        self.log_response_status(&url, status);
+        let reply: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("embedding reply: {e}"))?;
+        let wall_clock_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        if !status.is_success() {
+            let s = reply.to_string();
+            return Err(format!("embedding {status}: {}", &s[..s.len().min(200)]));
+        }
+        embed_metrics_from(&reply, wall_clock_ms)
+    }
+
     /// Generate music or a sound effect from a text prompt and time it end to end
     /// (`POST /v1/audio/generations`). Unlike TTS, the reply is a JSON envelope carrying a
     /// base64 WAV in `data[0].b64_json` (the image-generation shape), decoded here so the
@@ -987,6 +1079,34 @@ impl BenchClient {
         self.log_response_body(&body);
         let server_load_ms = body.load_duration.map(|ns| ns as f64 / 1_000_000.0);
 
+        Ok((wall_ms, server_load_ms))
+    }
+
+    /// Load an embedding model on an Ollama-dialect server. A model that only embeds refuses
+    /// the empty generation `load_model` sends, so it is loaded by an empty `/api/embed`.
+    pub async fn load_embedding_model(&self, model: &str) -> Result<(f64, Option<f64>), String> {
+        let url = format!("{}/api/embed", self.base_url);
+        let body = serde_json::json!({ "model": model, "input": "", "keep_alive": KEEP_ALIVE });
+        self.log_request("POST", &url, &body);
+        let start = Instant::now();
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Load request failed: {}", e))?;
+        self.log_response_status(&url, resp.status());
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Load failed: {}", text));
+        }
+        let wall_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let reply: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {}", e))?;
+        let server_load_ms = reply["load_duration"].as_f64().map(|ns| ns / 1_000_000.0);
         Ok((wall_ms, server_load_ms))
     }
 
@@ -1675,6 +1795,28 @@ mod image_tests {
         assert_eq!(m.digest, again.digest);
         // A reply with no image errors rather than panics.
         assert!(image_metrics_from(&serde_json::json!({ "data": [] }), 500.0, (64, 64)).is_err());
+    }
+
+    #[test]
+    fn embed_metrics_read_the_vector_and_the_token_rate() {
+        let reply = serde_json::json!({
+            "data": [{ "embedding": [3.0, 4.0] }],
+            "usage": { "prompt_tokens": 10 }
+        });
+        let m = embed_metrics_from(&reply, 500.0).unwrap();
+        assert_eq!(m.dims, 2);
+        assert!((m.norm - 5.0).abs() < 1e-9);
+        assert_eq!(m.prompt_tokens, Some(10));
+        assert!((m.tokens_per_s.unwrap() - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn embed_metrics_refuse_a_vector_that_is_not_one() {
+        for vector in [serde_json::json!([]), serde_json::json!([0.0, 0.0])] {
+            let reply = serde_json::json!({ "data": [{ "embedding": vector }] });
+            assert!(embed_metrics_from(&reply, 1.0).is_err());
+        }
+        assert!(embed_metrics_from(&serde_json::json!({}), 1.0).is_err());
     }
 
     #[test]

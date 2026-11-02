@@ -22,8 +22,9 @@ lokprof never guesses it from the model name.
 | `tts` | `/v1/audio/speech` | the prompt as the input, voice `alloy`, format `wav` | `TTS latency`, `Real-time factor`, `Audio seconds` |
 | `music` | `/v1/audio/generations` | the prompt, a 5 second clip, seed 0 | `Music latency`, `Real-time factor`, `Audio seconds` |
 | `asr` | `/v1/audio/transcriptions` | the file of `--audio` | `ASR latency`, `Real-time factor`, `Word error rate`, `Audio seconds` |
+| `embedding` | `/v1/embeddings` | the prompt as the input | `Embedding latency`, `Input tokens`, `Input tokens per second` |
 
-`imagegen`, `speech`, `sfx` and `transcribe` are accepted as other names.
+`imagegen`, `speech`, `sfx`, `transcribe` and `embeddings` are accepted as other names.
 An unknown value is measured as `text`.
 
 The real-time factor is the seconds of audio over the seconds of the request.
@@ -84,8 +85,9 @@ Each kind has its own coherence gate:
 | `image` | every iteration produced the same bytes, since the seed is fixed |
 | `tts`, `music` | 1 iteration at least returned more than 0.05 seconds of audio |
 | `asr` | 1 iteration at least returned a transcript |
+| `embedding` | 1 iteration at least returned a vector that is finite and not all zeros |
 
-Image, speech, music and transcription cells record no energy, no card samples and no per-iteration rows.  
+Image, speech, music, transcription and embedding cells record no energy, no card samples and no per-iteration rows.  
 `--stream`, `--max-tokens`, `--unique-prompt` and `--concurrency` do not apply to them.  
 In a comparison, the `Diff` of `Megapixels/s` and `Real-time factor` reads a lower value as better, see [Metrics](../reference/metrics.md#comparison-table).
 

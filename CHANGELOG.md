@@ -5,6 +5,10 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Modalities: measure an embedding model.
+
 ## [0.5.0] - 2026-11-02
 
 ### Added

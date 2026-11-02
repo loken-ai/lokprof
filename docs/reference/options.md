@@ -33,10 +33,10 @@ A streamed request to Ollama or loken speaks plain HTTP and refuses an `https` a
 | `--num-ctx` | list of integers | `4096` | The context lengths, sent as `num_ctx` to Ollama and loken. vLLM keeps the window set at its launch |
 | `--prompts` | list of names | `short,medium,long` | The built-in prompts, see [Prompts](prompts.md) |
 | `-p`, `--prompt` | text | none | 1 prompt of your own, named `custom`, in place of `--prompts` |
-| `--modality` | `text`, `vision`, `image`, `tts`, `music`, `asr` | `text` | What the models are, see [Benchmark image, speech and music models](../guides/media.md) |
+| `--modality` | `text`, `vision`, `image`, `tts`, `music`, `asr`, `embedding` | `text` | What the models are, see [Benchmark image, speech and music models](../guides/media.md) |
 <!-- site: end -->
 
-`--modality` also accepts `imagegen` and `image-gen` for `image`, `speech` for `tts`, `sfx`, `audiogen` and `audio-gen` for `music`, and `transcribe` for `asr`, in any case.
+`--modality` also accepts `imagegen` and `image-gen` for `image`, `speech` for `tts`, `sfx`, `audiogen` and `audio-gen` for `music`, `transcribe` for `asr`, and `embeddings` and `embed` for `embedding`, in any case.
 Any other value is measured as `text`.
 
 ## Requests

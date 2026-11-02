@@ -254,7 +254,7 @@ struct Args {
     image: Option<String>,
 
     /// What the listed models are, so the cell is measured by the right clock: `text` (default),
-    /// `vision`, `image` (generation), `tts`, or `asr`. The driver derives it from what loken
+    /// `vision`, `image` (generation), `tts`, `asr`, or `embedding`. The driver derives it from what loken
     /// declares and passes it; lokprof does not guess it from the model name.
     #[arg(long, default_value = "text")]
     modality: String,
@@ -745,7 +745,12 @@ async fn main() {
                 }
             } else {
                 print!("  [{}] Loading model {}... ", target.label, model);
-                match clients[idx].load_model(model).await {
+                let loaded = if parse_modality(&args.modality) == Modality::Embedding {
+                    clients[idx].load_embedding_model(model).await
+                } else {
+                    clients[idx].load_model(model).await
+                };
+                match loaded {
                     Ok((wall, server)) => {
                         let display = server.unwrap_or(wall);
                         println!("{:.0}ms", display);
@@ -777,6 +782,20 @@ async fn main() {
                     let cell = match parse_modality(&args.modality) {
                         Modality::ImageGen => {
                             run_image_cell(
+                                &clients[idx],
+                                target,
+                                model,
+                                num_ctx,
+                                prompt_name,
+                                prompt_text,
+                                args.iterations,
+                                args.warmup,
+                                args.carbon_intensity,
+                            )
+                            .await
+                        }
+                        Modality::Embedding => {
+                            run_embedding_cell(
                                 &clients[idx],
                                 target,
                                 model,
@@ -1613,6 +1632,7 @@ fn parse_modality(s: &str) -> Modality {
         "tts" | "speech" => Modality::Tts,
         "music" | "sfx" | "audiogen" | "audio-gen" => Modality::Music,
         "asr" | "transcribe" => Modality::Asr,
+        "embedding" | "embeddings" | "embed" => Modality::Embedding,
         _ => Modality::Text,
     }
 }
@@ -1932,6 +1952,100 @@ async fn run_tts_cell<'a>(
         load_error,
         iteration_errors: errors,
         settings: serde_json::json!({ "voice": VOICE }),
+    }
+}
+
+/// Measure an embedding model: warm up, then `iterations` timed requests of the same input,
+/// reporting latency and input tokens per second. The cell is coherent when every vector is
+/// finite and not all zeros.
+#[allow(clippy::too_many_arguments)]
+async fn run_embedding_cell<'a>(
+    client: &BenchClient,
+    target: &'a ServerTarget,
+    model: &str,
+    num_ctx: usize,
+    prompt_name: &str,
+    prompt: &str,
+    iterations: usize,
+    warmup: usize,
+    carbon_intensity: f64,
+) -> CellResult<'a> {
+    println!(
+        "  [{}] Embedding, {} iteration(s)...",
+        target.label, iterations
+    );
+    let mut errors = Vec::new();
+    for _ in 0..warmup {
+        if let Err(e) = client.generate_embedding(model, prompt).await {
+            println!("    warm-up failed: {e}");
+            errors.push(format!("warm-up: {e}"));
+        }
+    }
+    let mut latencies = Vec::new();
+    let mut rates = Vec::new();
+    let mut tokens = Vec::new();
+    let mut dims = None;
+    for i in 0..iterations {
+        match client.generate_embedding(model, prompt).await {
+            Ok(m) => {
+                println!(
+                    "    #{}: {:.0} ms, {} dims, norm {:.3}",
+                    i + 1,
+                    m.wall_clock_ms,
+                    m.dims,
+                    m.norm
+                );
+                dims.get_or_insert(m.dims);
+                latencies.push(m.wall_clock_ms);
+                rates.extend(m.tokens_per_s);
+                tokens.extend(m.prompt_tokens.map(|t| t as f64));
+            }
+            Err(e) => {
+                println!("    #{}: ERR {e}", i + 1);
+                errors.push(e);
+            }
+        }
+    }
+    let coherence_pass = (!latencies.is_empty()).then_some(true);
+    let mut stats = Vec::new();
+    if let Some(s) = Stats::compute("Embedding latency", "ms", &latencies) {
+        stats.push(s);
+    }
+    if let Some(s) = Stats::compute("Input tokens", "tok", &tokens) {
+        stats.push(s);
+    }
+    if let Some(s) = Stats::compute("Input tokens per second", "tok/s", &rates) {
+        stats.push(s);
+    }
+    let load_error = if latencies.is_empty() {
+        Some(
+            errors
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "no embedding produced".to_string()),
+        )
+    } else {
+        None
+    };
+    CellResult {
+        target,
+        model: model.to_string(),
+        model_fingerprint: None,
+        num_ctx,
+        prompt_name: prompt_name.to_string(),
+        prompt_chars: prompt.len(),
+        iterations: Vec::new(),
+        gpu_samples_per_iter: Vec::new(),
+        host_samples_per_iter: Vec::new(),
+        energy_per_iter: Vec::new(),
+        carbon_intensity,
+        load_time_ms: None,
+        stats,
+        first_response_preview: dims.map(|d| format!("{d} dims")),
+        coherence_pass,
+        load_error,
+        iteration_errors: errors,
+        settings: serde_json::json!({}),
     }
 }
 
