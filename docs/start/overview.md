@@ -104,6 +104,7 @@ The values in angle brackets stand for the figures of a run.
 | Vision prompts with an attached image | `--image`, [guide](../guides/vision.md) | Ollama and loken |
 | Image generation, speech, music and transcription | `--modality`, [guide](../guides/media.md) | no energy figures |
 | Concurrent requests | `--concurrency`, [guide](../guides/concurrency.md) | no energy figures |
+| Rate a server serves | `--load`, [guide](../guides/load.md) | no energy figures |
 | Comparison with an earlier record | `--baseline`, [guide](../guides/baseline.md) | decode rate per cell |
 | JSON record of the machine, the servers and every iteration | `-o`, [record](../reference/record.md) | schema `loken/2` |
 | CSV of every iteration | `--output-csv` | text and vision |

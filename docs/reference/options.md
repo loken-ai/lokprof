@@ -49,6 +49,7 @@ Any other value is measured as `text`.
 | `-n`, `--iterations` | integer | `3` | The measured requests of each cell |
 | `-w`, `--warmup` | integer | `1` | The requests sent before the iterations of each cell, and discarded |
 | `--concurrency` | integer | `1` | The requests in flight at once, see [Measure concurrent requests](../guides/concurrency.md) |
+| `--load` | `constant`, `random` | none | Offer requests at a rate of their own and find the rate served, see [Find the rate a server serves](../guides/load.md) |
 | `--unique-prompt` | flag | off | Starts the prompt of each iteration with `Request N of a benchmark series.` and an empty line, so no prefix cache answers it |
 | `--request-timeout` | seconds | `600` | How long a request may take before it is given up. For a stream, how long it may stay silent |
 | `--num-gpu` | integer | not sent | Sends `num_gpu` in the options of every Ollama and loken request. Ollama keeps that many layers on its cards, loken ignores it |

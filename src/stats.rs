@@ -71,6 +71,8 @@ impl Stats {
             }
         } else if self.unit == "tok/s" {
             format!("{:.1}", val)
+        } else if self.unit == "req/s" {
+            format!("{:.2}", val)
         } else if self.unit == "J" {
             // Energy per token is sub-joule to a few J - keep 3 decimals.
             format!("{:.3}", val)
@@ -314,6 +316,8 @@ mod tests {
         // tok/s and unknown units don't fold to seconds.
         let t = Stats::compute("x", "tok/s", &[1.0]).unwrap();
         assert_eq!(t.fmt_val(123.45), "123.5");
+        let r = Stats::compute("x", "req/s", &[1.0]).unwrap();
+        assert_eq!(r.fmt_val(1.694), "1.69");
         let u = Stats::compute("x", "%", &[1.0]).unwrap();
         assert_eq!(u.fmt_val(85.6), "86"); // {:.0} round
     }

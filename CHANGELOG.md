@@ -8,6 +8,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Modalities: measure an embedding model.
+- Load: offer requests at a constant or a random rate and find the rate served.
 
 ## [0.5.0] - 2026-11-02
 

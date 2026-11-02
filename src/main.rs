@@ -19,6 +19,7 @@ mod energy;
 mod gpu_energy;
 mod gpu_sampler;
 mod host_sampler;
+mod load;
 mod provenance;
 mod stats;
 
@@ -209,6 +210,13 @@ struct Args {
     /// second, and that is invisible to a sequential sweep.
     #[arg(long, default_value = "1")]
     concurrency: usize,
+
+    /// Offer requests at a rate of their own instead of one after another: `constant` spaces
+    /// them evenly, `random` draws the gaps from a Poisson process. The bench raises the rate
+    /// until the latency of the requests rises and reports the highest rate the engine served.
+    /// Each step sends `--iterations` requests, so a step needs at least 8 to be read.
+    #[arg(long)]
+    load: Option<String>,
 
     /// Number of warmup iterations (not counted in stats)
     #[arg(short, long, default_value = "1")]
@@ -771,6 +779,7 @@ async fn main() {
                 }
             };
 
+            let load_profile = args.load.as_deref().and_then(load::Profile::parse);
             for &num_ctx in &args.num_ctx {
                 for (prompt_name, prompt_text) in &prompt_specs {
                     println!();
@@ -878,6 +887,21 @@ async fn main() {
                         },
                         // Text and vision keep the token path (vision rides it with an attached
                         // image).
+                        _ if load_profile.is_some() => {
+                            run_load_cell(
+                                &clients[idx],
+                                target,
+                                model,
+                                num_ctx,
+                                prompt_name,
+                                prompt_text,
+                                args.max_tokens,
+                                args.iterations,
+                                args.carbon_intensity,
+                                load_profile.unwrap_or(load::Profile::Constant),
+                            )
+                            .await
+                        }
                         _ => {
                             run_cell(
                                 &clients[idx],
@@ -1953,6 +1977,115 @@ async fn run_tts_cell<'a>(
         iteration_errors: errors,
         settings: serde_json::json!({ "voice": VOICE }),
     }
+}
+
+/// Measure the rate an engine serves: offer `iterations` requests per step at a growing rate
+/// and report the highest rate whose latency did not rise.
+#[allow(clippy::too_many_arguments)]
+async fn run_load_cell<'a>(
+    client: &BenchClient,
+    target: &'a ServerTarget,
+    model: &str,
+    num_ctx: usize,
+    prompt_name: &str,
+    prompt: &str,
+    max_tokens: usize,
+    iterations: usize,
+    carbon_intensity: f64,
+    profile: load::Profile,
+) -> CellResult<'a> {
+    println!(
+        "  [{}] Offered load, {:?} arrivals, {} requests per step...",
+        target.label, profile, iterations
+    );
+    let mut cell = CellResult {
+        target,
+        model: model.to_string(),
+        model_fingerprint: None,
+        num_ctx,
+        prompt_name: prompt_name.to_string(),
+        prompt_chars: prompt.len(),
+        iterations: Vec::new(),
+        gpu_samples_per_iter: Vec::new(),
+        host_samples_per_iter: Vec::new(),
+        energy_per_iter: Vec::new(),
+        carbon_intensity,
+        load_time_ms: None,
+        stats: Vec::new(),
+        first_response_preview: None,
+        coherence_pass: None,
+        load_error: None,
+        iteration_errors: Vec::new(),
+        settings: serde_json::json!({ "load": format!("{profile:?}").to_lowercase() }),
+    };
+    if iterations < 8 {
+        cell.load_error = Some(format!(
+            "offered load needs at least 8 requests per step, got {iterations}"
+        ));
+        return cell;
+    }
+    // One request alone gives the rate the search starts from.
+    let alone = match client
+        .generate(model, prompt, max_tokens, Some(num_ctx), None, None)
+        .await
+    {
+        Ok(m) => m.wall_clock_ms / 1000.0,
+        Err(e) => {
+            cell.load_error = Some(format!("the first request failed: {e}"));
+            return cell;
+        }
+    };
+    let mut step_no = 0u64;
+    let search = load::find_saturation(1.0 / alone.max(1e-6), iterations, |rate| {
+        step_no += 1;
+        let at = load::arrivals(profile, rate, iterations, step_no);
+        async move {
+            let t0 = tokio::time::Instant::now();
+            futures::future::join_all(at.into_iter().map(|offset| async move {
+                let due = t0 + Duration::from_secs_f64(offset);
+                tokio::time::sleep_until(due).await;
+                client
+                    .generate(model, prompt, max_tokens, Some(num_ctx), None, None)
+                    .await
+                    .ok()
+                    // Latency counts from the planned arrival, so a client that falls behind
+                    // does not hide the queue it makes.
+                    .map(|_| due.elapsed().as_secs_f64() * 1000.0)
+            }))
+            .await
+        }
+    })
+    .await;
+    for s in &search.steps {
+        let mut sorted = s.latencies_ms.clone();
+        sorted.sort_by(|a, b| a.total_cmp(b));
+        let median = sorted.get(sorted.len() / 2).copied().unwrap_or(0.0);
+        println!(
+            "    {:.2} req/s: median {:.0} ms, {}{}",
+            s.rate,
+            median,
+            if s.grows { "queue grows" } else { "served" },
+            if s.failed > 0 {
+                format!(", {} failed", s.failed)
+            } else {
+                String::new()
+            }
+        );
+        if s.failed > 0 {
+            cell.iteration_errors
+                .push(format!("{:.2} req/s: {} failed", s.rate, s.failed));
+        }
+    }
+    match search.sustained {
+        Some(rate) => {
+            println!("    sustained: {rate:.2} req/s");
+            cell.stats
+                .extend(Stats::compute("Sustained rate", "req/s", &[rate]));
+            cell.coherence_pass = Some(true);
+        }
+        None => cell.load_error = Some("no rate was served without a rising latency".to_string()),
+    }
+    cell
 }
 
 /// Measure an embedding model: warm up, then `iterations` timed requests of the same input,
