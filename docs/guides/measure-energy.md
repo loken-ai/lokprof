@@ -95,17 +95,17 @@ Each window goes from these domains to the figures of the results table:
 
 ```mermaid
 flowchart LR
-    G[gpu: NVML or hwmon] --> C{every card, cpu_pkg<br/>and dram read?}
-    P[cpu_pkg: RAPL package] --> C
-    D[dram: RAPL, where reported] --> C
-    C -->|no| N[no figure, missing_domains and note]
+    G([gpu: NVML or hwmon]) --> C{every card and cpu_pkg read,<br/>and dram where reported?}
+    P([cpu_pkg: RAPL package]) --> C
+    D([dram: RAPL, where reported]) --> C
+    C -->|no| N([no figure, missing_domains and note])
     C -->|yes| J[energy_j of the window]
     J --> T[J/tok: over the tokens generated]
     T --> W[Wh/tok: over 3600]
-    W --> K[gCO2/tok: times the intensity, over 1000]
+    W --> K([gCO2/tok: times the intensity, over 1000])
     J --> S{streamed, and a card read<br/>by a counter or hwmon?}
-    S -->|yes| X[decode J/tok: energy after the first token]
-    S -->|no| R[no decode row]
+    S -->|yes| X([decode J/tok: energy after the first token])
+    S -->|no| R([no decode row])
 ```
 
 The decode split needs `--stream` and a card read by a counter or through hwmon.  
