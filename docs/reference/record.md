@@ -97,7 +97,7 @@ When no card carries a `uuid`, `driver` is left out, and `hardware_id` is derive
 | `carbon_intensity_gco2_per_kwh` | `--carbon-intensity` |
 | `session_id`, `num_gpu` | `--session-id` and `--num-gpu`, or `null` |
 
-The record does not hold `--concurrency`, `--modality`, `--require-substr`, `--image`, `--audio` or `--request-timeout`.
+The record does not hold `--concurrency`, `--modality`, `--require-substr`, `--image` or `--audio`.
 
 ## idle_energy_baseline
 
@@ -136,11 +136,14 @@ The record does not hold `--concurrency`, `--modality`, `--require-substr`, `--i
 
 | Cell | `settings` |
 |---|---|
-| text and vision | `{"keep_alive": "30m"}` |
+| text, vision and embedding | `{"keep_alive": "30m"}` |
 | image | `{"size": [1024, 1024], "seed": 42}` |
 | speech | `{"voice": "alloy"}` |
 | music | `{"seconds": 5.0}` |
-| transcription, or a cell that could not load | `null` |
+| transcription | `{}` |
+| a cell that could not load | `null` |
+
+Every cell that measured holds `request_timeout_s` too: the seconds a request may take, from `--request-timeout`.
 
 ## Iteration
 

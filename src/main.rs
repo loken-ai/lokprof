@@ -929,6 +929,8 @@ async fn main() {
                             .await
                         }
                     };
+                    let mut cell = cell;
+                    record_timeout(&mut cell.settings, args.request_timeout);
                     all_cells.push(cell);
                 }
             }
@@ -2088,6 +2090,16 @@ async fn run_load_cell<'a>(
     cell
 }
 
+/// Records the request timeout among the settings of a cell, whatever it measured.
+fn record_timeout(settings: &mut serde_json::Value, seconds: u64) {
+    if settings.is_null() {
+        *settings = serde_json::json!({});
+    }
+    if let Some(map) = settings.as_object_mut() {
+        map.insert("request_timeout_s".to_string(), seconds.into());
+    }
+}
+
 /// Measure an embedding model: warm up, then `iterations` timed requests of the same input,
 /// reporting latency and input tokens per second. The cell is coherent when every vector is
 /// finite and not all zeros.
@@ -2178,7 +2190,7 @@ async fn run_embedding_cell<'a>(
         coherence_pass,
         load_error,
         iteration_errors: errors,
-        settings: serde_json::json!({}),
+        settings: serde_json::json!({ "keep_alive": api::KEEP_ALIVE }),
     }
 }
 
@@ -2666,9 +2678,21 @@ fn normalize_url(input: &str) -> String {
 
 #[cfg(test)]
 mod pairing_tests {
-    use super::{add_known_tokens, per_token};
+    use super::{add_known_tokens, per_token, record_timeout};
     use crate::api::IterationMetrics;
     use crate::energy::{EnergyWindow, GpuEnergyPath};
+
+    /// The timeout joins the settings a cell holds, or makes them when it held none.
+    #[test]
+    fn the_request_timeout_joins_the_settings() {
+        let mut held = serde_json::json!({ "voice": "alloy" });
+        record_timeout(&mut held, 600);
+        assert_eq!(held["voice"], "alloy");
+        assert_eq!(held["request_timeout_s"], 600);
+        let mut none = serde_json::Value::Null;
+        record_timeout(&mut none, 30);
+        assert_eq!(none["request_timeout_s"], 30);
+    }
 
     /// A missing token count is left out of a total and counted apart.
     #[test]
