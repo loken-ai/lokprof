@@ -10,6 +10,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Modalities: measure an embedding model.
 - Load: offer requests at a constant or a random rate and find the rate served.
 - Records: hold the request timeout of every cell.
+- Records: hold the command, the binary hash and a seal that detects a change.
 
 ## [0.5.0] - 2026-11-02
 

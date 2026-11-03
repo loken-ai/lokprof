@@ -18,6 +18,8 @@ In `machine`, a field that could not be read is absent.
 | `config` | the options of the run, see [config](#config) |
 | `idle_energy_baseline` | the idle draw, see [idle_energy_baseline](#idle_energy_baseline) |
 | `results` | 1 object per cell, see [Cell](#cell) |
+| `recipe` | what reproduces the run, see [recipe](#recipe) |
+| `seal` | the digest of the record, see [seal](#seal) |
 
 The major changes when a rule changes what a number means, never for a new field.
 A reader compares the major and refuses a record of another one.
@@ -112,6 +114,32 @@ The record does not hold `--concurrency`, `--modality`, `--require-substr`, `--i
 | `idle_watts` | `energy_j` over `duration_s`. `null` when not complete |
 | `domains_counted` | the domains that were read: `gpu`, `cpu_pkg`, `dram` |
 | `note` | what was not read, and why, or `null` |
+
+## recipe
+
+| Field | Holds |
+|---|---|
+| `command` | the command line, with each URL, path and file name replaced by `<place>` |
+| `binary_sha256` | the SHA-256 of the lokprof binary that ran, or `null` when it cannot be read |
+| `config_sha256` | the SHA-256 of the `config` object above, as it was written |
+
+The record names no host, no home directory and no file.
+
+## seal
+
+`seal` is a SHA-256 in hexadecimal.
+It is the digest of the record text written with 64 zeros in place of the seal.
+
+To check a file, replace its seal by 64 zeros in the text and hash the result:
+
+```sh
+sed "s/$(jq -r .seal record.json)/$(printf '0%.0s' $(seq 64))/" record.json | sha256sum
+```
+
+The output is the seal when the file is unchanged.  
+The seal detects a change.
+It does not say who wrote the record.
+`--baseline` warns when the seal of the file it reads does not match.
 
 ## Cell
 

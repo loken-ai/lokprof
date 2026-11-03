@@ -1027,6 +1027,12 @@ fn compare_to_baseline(path: &str, cells: &[CellResult]) {
             return;
         }
     };
+    // A record written before the seal existed carries none and is compared as it was.
+    if baseline.get("seal").is_some() && !provenance::seal_holds(&text) {
+        println!(
+            "  WARNING: the baseline was changed after lokprof wrote it (its seal does not match)"
+        );
+    }
     let results = match baseline.get("results").and_then(|v| v.as_array()) {
         Some(r) => r,
         None => {
@@ -2604,7 +2610,13 @@ fn save_json(
         "results": results,
     });
 
-    match std::fs::write(path, serde_json::to_string_pretty(&payload).unwrap()) {
+    // The recipe and the seal go in last: the seal covers everything above it.
+    let mut payload = payload;
+    payload["recipe"] = provenance::recipe(
+        provenance::redacted_command(std::env::args()),
+        &payload["config"],
+    );
+    match std::fs::write(path, provenance::sealed(payload)) {
         Ok(()) => println!("  Results saved to {}", path),
         Err(e) => eprintln!("  Failed to save JSON: {}", e),
     }

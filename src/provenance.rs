@@ -374,8 +374,144 @@ pub async fn engine_devices(http: &reqwest::Client, base_url: &str) -> Option<se
     }))
 }
 
+/// The command line, with every value that names a place on this machine replaced: a URL, a
+/// path or a home directory says where the run happened, which the record never does.
+pub fn redacted_command(args: impl IntoIterator<Item = String>) -> Vec<String> {
+    let place = |v: &str| {
+        v.contains("://")
+            || v.starts_with('/')
+            || v.starts_with('~')
+            || v.starts_with('.')
+            || v.contains('\\')
+            || [
+                ".json", ".csv", ".wav", ".txt", ".png", ".jpg", ".jpeg", ".gguf", ".toml",
+            ]
+            .iter()
+            .any(|e| v.ends_with(e))
+            || v.rsplit_once(':').is_some_and(|(h, p)| {
+                !h.is_empty()
+                    && p.chars().all(|c| c.is_ascii_digit())
+                    && !p.is_empty()
+                    && h.chars().any(|c| c == '.' || c.is_ascii_digit())
+            })
+    };
+    args.into_iter()
+        .enumerate()
+        .map(|(i, a)| {
+            if i == 0 {
+                // The program, by its file name alone.
+                return a.rsplit('/').next().unwrap_or(&a).to_string();
+            }
+            match a.split_once('=') {
+                Some((flag, value)) if a.starts_with('-') && place(value) => {
+                    format!("{flag}=<place>")
+                }
+                _ if !a.starts_with('-') && place(&a) => "<place>".to_string(),
+                _ => a,
+            }
+        })
+        .collect()
+}
+
+/// The hex SHA-256 of the file at `path`, `None` when it cannot be read.
+pub fn file_sha256(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// What reproduces the run: the command, the binary that ran it and a digest of the
+/// configuration the cells were measured under.
+pub fn recipe(command: Vec<String>, config: &serde_json::Value) -> serde_json::Value {
+    let binary = std::env::current_exe().ok().and_then(|p| file_sha256(&p));
+    serde_json::json!({
+        "command": command,
+        "binary_sha256": binary,
+        "config_sha256": format!("{:x}", Sha256::digest(config.to_string().as_bytes())),
+    })
+}
+
+/// The placeholder the seal holds while the record is hashed.
+pub const SEAL_BLANK: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+/// The record text with its seal filled in. The seal is the SHA-256 of the text written with
+/// [`SEAL_BLANK`] in its place, so any reader hashes the file the same way after blanking the
+/// seal. A copy that changes under the same name no longer matches. It detects change, it does
+/// not authenticate who wrote the record.
+pub fn sealed(mut payload: serde_json::Value) -> String {
+    payload["seal"] = serde_json::Value::String(SEAL_BLANK.to_string());
+    let blank = serde_json::to_string_pretty(&payload).unwrap_or_default();
+    let digest = format!("{:x}", Sha256::digest(blank.as_bytes()));
+    blank.replacen(SEAL_BLANK, &digest, 1)
+}
+
+/// Whether the record text holds the seal of its own content.
+pub fn seal_holds(text: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    let Some(seal) = v["seal"].as_str().map(str::to_string) else {
+        return false;
+    };
+    let blank = text.replacen(&seal, SEAL_BLANK, 1);
+    format!("{:x}", Sha256::digest(blank.as_bytes())) == seal
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_command_keeps_the_flags_and_drops_the_places() {
+        let args = [
+            "/home/someone/bin/lokprof",
+            "--loken",
+            "http://lokend.example:11435",
+            "--models",
+            "Qwen/Qwen3-8B-AWQ",
+            "--audio=/data/sample.wav",
+            "-o",
+            "results-myhost.json",
+            "--ollama",
+            "engine.example:11434",
+            "-n",
+            "3",
+        ]
+        .map(String::from);
+        assert_eq!(
+            redacted_command(args),
+            [
+                "lokprof",
+                "--loken",
+                "<place>",
+                "--models",
+                "Qwen/Qwen3-8B-AWQ",
+                "--audio=<place>",
+                "-o",
+                "<place>",
+                "--ollama",
+                "<place>",
+                "-n",
+                "3"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_sealed_record_stops_matching_when_it_changes() {
+        let text = sealed(serde_json::json!({ "results": [1, 2, 3] }));
+        assert!(seal_holds(&text));
+        assert!(!seal_holds(&text.replace('3', "4")));
+        assert!(!seal_holds("{}"));
+    }
+
     use super::*;
 
     /// A machine described by the cards a server lists: the card of another vendor is named as
