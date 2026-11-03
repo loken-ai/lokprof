@@ -1626,6 +1626,7 @@ async fn run_cell<'a>(
     // Capture model fingerprint so JSON output is cross-session attributable.
     let model_fingerprint = client.model_fingerprint(model).await;
     let running_format = client.running_format(model).await;
+    let model_digest = client.model_digest(model).await;
     if let Some((mod_at, params, quant)) = model_fingerprint.as_ref() {
         println!(
             "  [{}] Model fingerprint: modified_at={} params={} quant={}",
@@ -1651,7 +1652,7 @@ async fn run_cell<'a>(
         coherence_pass,
         load_error: None,
         iteration_errors,
-        settings: serde_json::json!({ "keep_alive": api::KEEP_ALIVE, "running_format": running_format }),
+        settings: serde_json::json!({ "keep_alive": api::KEEP_ALIVE, "running_format": running_format, "model_digest": model_digest }),
     }
 }
 
@@ -2180,6 +2181,7 @@ async fn run_embedding_cell<'a>(
         None
     };
     let running_format = client.running_format(model).await;
+    let model_digest = client.model_digest(model).await;
     CellResult {
         target,
         model: model.to_string(),
@@ -2198,7 +2200,7 @@ async fn run_embedding_cell<'a>(
         coherence_pass,
         load_error,
         iteration_errors: errors,
-        settings: serde_json::json!({ "keep_alive": api::KEEP_ALIVE, "running_format": running_format }),
+        settings: serde_json::json!({ "keep_alive": api::KEEP_ALIVE, "running_format": running_format, "model_digest": model_digest }),
     }
 }
 

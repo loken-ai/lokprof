@@ -164,7 +164,7 @@ It does not say who wrote the record.
 
 | Cell | `settings` |
 |---|---|
-| text, vision and embedding | `{"keep_alive": "30m", "running_format": "bf16"}`, `running_format` is `null` when the server does not say |
+| text, vision and embedding | `{"keep_alive": "30m", "running_format": "bf16", "model_digest": "sha256:..."}`, `running_format` and `model_digest` are `null` when the server does not say. `model_digest` is the digest of the model file the server runs, from `/api/tags` |
 | image | `{"size": [1024, 1024], "seed": 42}` |
 | speech | `{"voice": "alloy"}` |
 | music | `{"seconds": 5.0}` |

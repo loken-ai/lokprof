@@ -551,6 +551,23 @@ pub struct BenchClient {
     timeout: Duration,
 }
 
+/// The digest of the model file `model` that a `/api/tags` body lists, matched on `name` or
+/// `model`. `None` when the body is not JSON, the model is not listed or it carries no digest.
+pub fn model_digest_from(tags_body: &str, model: &str) -> Option<String> {
+    let body: serde_json::Value = serde_json::from_str(tags_body).ok()?;
+    body.get("models")?
+        .as_array()?
+        .iter()
+        .find(|m| {
+            ["name", "model"]
+                .iter()
+                .any(|k| m.get(k).and_then(|v| v.as_str()) == Some(model))
+        })?
+        .get("digest")?
+        .as_str()
+        .map(String::from)
+}
+
 impl BenchClient {
     /// A client of the engine at `base_url`.
     /// A request that takes longer than `timeout` is given up.
@@ -997,6 +1014,21 @@ impl BenchClient {
         let resp = self.http.get(&url).send().await.ok()?;
         let body: serde_json::Value = resp.json().await.ok()?;
         running_format_of(&body, model)
+    }
+
+    /// The digest of the model file the server runs `model` from, as `/api/tags` lists it.
+    /// `None` when the server does not list one, which includes the OpenAI dialect.
+    pub async fn model_digest(&self, model: &str) -> Option<String> {
+        if self.protocol == Protocol::OpenAI {
+            return None;
+        }
+        let url = format!("{}/api/tags", self.base_url);
+        let resp = self.http.get(&url).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let text = resp.text().await.ok()?;
+        model_digest_from(&text, model)
     }
 
     /// Unload any loaded model by sending empty prompt with keep_alive: 0.
@@ -1965,6 +1997,48 @@ mod image_tests {
         );
         let r = tls.generate_stream("m", "p", 8, None, None, None).await;
         assert!(r.unwrap_err().contains("https"));
+    }
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::*;
+
+    const TAGS: &str = r#"{"models":[
+        {"name":"a:latest","model":"a:latest","digest":"sha256:aaa"},
+        {"name":"b:latest","model":"b-alias","digest":"sha256:bbb"},
+        {"name":"c:latest","model":"c:latest"}]}"#;
+
+    #[test]
+    fn a_digest_is_found_by_name() {
+        assert_eq!(
+            model_digest_from(TAGS, "a:latest").as_deref(),
+            Some("sha256:aaa")
+        );
+    }
+
+    #[test]
+    fn a_digest_is_found_by_model() {
+        assert_eq!(
+            model_digest_from(TAGS, "b-alias").as_deref(),
+            Some("sha256:bbb")
+        );
+    }
+
+    #[test]
+    fn an_absent_model_has_no_digest() {
+        assert_eq!(model_digest_from(TAGS, "z:latest"), None);
+    }
+
+    #[test]
+    fn a_listed_model_without_a_digest_has_none() {
+        assert_eq!(model_digest_from(TAGS, "c:latest"), None);
+    }
+
+    #[test]
+    fn malformed_json_has_no_digest() {
+        assert_eq!(model_digest_from("not json", "a:latest"), None);
+        assert_eq!(model_digest_from("{\"models\":3}", "a:latest"), None);
     }
 }
 
