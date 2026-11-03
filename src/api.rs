@@ -520,6 +520,9 @@ pub struct IterationMetrics {
     /// see what was answered; never judged, because 120 characters of a 500-character answer
     /// is not the answer.
     pub response_preview: Option<String>,
+    /// The whole answer, kept in memory to compare it with another engine's.
+    /// It is never written to a record.
+    pub response_text: String,
     /// Whether the WHOLE answer was a repeating pattern rather than an answer.
     ///
     /// Decided here, where the text is still complete, and carried rather than recomputed.
@@ -1303,6 +1306,7 @@ impl BenchClient {
             content_tokens: None, // non-streaming has no chunk count
             inter_token_latencies_ms: Vec::new(),
             response_preview: Some(truncate_preview(&body.response)),
+            response_text: body.response.clone(),
             degenerate: Some(crate::coherence::looks_degenerate(&body.response)),
             first_token_wall_ms: None, // non-streaming has no per-token timing
         })
@@ -1550,6 +1554,7 @@ impl BenchClient {
             content_tokens: Some(token_count),
             inter_token_latencies_ms,
             response_preview: Some(truncate_preview(&text_acc)),
+            response_text: text_acc.clone(),
             degenerate: Some(crate::coherence::looks_degenerate(&text_acc)),
             first_token_wall_ms: token_times_ms.first().copied(),
         })
@@ -1641,6 +1646,7 @@ impl BenchClient {
             content_tokens: None,
             inter_token_latencies_ms: Vec::new(),
             response_preview: Some(truncate_preview(&text)),
+            response_text: text.clone(),
             degenerate: Some(crate::coherence::looks_degenerate(&text)),
             first_token_wall_ms: None, // non-streaming has no per-token timing
         })
@@ -1773,6 +1779,7 @@ impl BenchClient {
             content_tokens: Some(token_count),
             inter_token_latencies_ms,
             response_preview: Some(truncate_preview(&text_acc)),
+            response_text: text_acc.clone(),
             degenerate: Some(crate::coherence::looks_degenerate(&text_acc)),
             first_token_wall_ms: token_times_ms.first().copied(),
         })

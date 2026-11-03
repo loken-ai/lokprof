@@ -13,6 +13,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Records: hold the command, the binary hash and a seal that detects a change.
 - Records: say which format the server runs the model in.
 - Records: hold the digest of the model file the server lists.
+- Records: hold how far each engine's answer departs from the first engine's.
 
 ## [0.5.0] - 2026-11-02
 

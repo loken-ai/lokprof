@@ -173,6 +173,22 @@ It does not say who wrote the record.
 
 Every cell that measured holds `request_timeout_s` too: the seconds a request may take, from `--request-timeout`.
 
+### quality
+
+An invocation that measures several targets compares their answers.
+The reference is the first target, in the order `--ollama`, `--loken`, `--vllm`.
+Each iteration of a cell is compared with the iteration of the same position in the reference cell, on the same model, context and prompt.
+The answers themselves are not written to the record.
+
+| Field | Holds |
+|---|---|
+| `reference` | `true` for the cell of the first target, which is identical to itself |
+| `iterations` | the iterations compared |
+| `identical_iterations` | the iterations whose answer equals the reference answer, character for character |
+| `mean_common_prefix_chars` | the mean length, in characters, of the longest prefix the answer shares with the reference answer |
+
+`quality` is `null` in a single-target invocation, and in a cell that has no iteration to compare.
+
 ## Iteration
 
 <!-- site: widget table id=lokprof-record-iteration -->

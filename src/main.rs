@@ -21,6 +21,7 @@ mod gpu_sampler;
 mod host_sampler;
 mod load;
 mod provenance;
+mod quality;
 mod stats;
 
 use api::{BenchClient, IterationMetrics, Modality, Protocol};
@@ -366,6 +367,39 @@ struct CellResult<'a> {
     /// The settings the bench chose for the modality.
     /// The record holds them.
     settings: serde_json::Value,
+}
+
+/// The `quality` of a cell: its answers against those of the first target, on the same model,
+/// context and prompt.
+/// The value names that target as `reference_target`.
+/// `null` for a cell with no other target to compare with, or no reference cell.
+fn cell_quality_in(cells: &[CellResult], cell: &CellResult) -> serde_json::Value {
+    let Some(first) = cells.first() else {
+        return serde_json::Value::Null;
+    };
+    let texts = |c: &CellResult| -> Vec<String> {
+        c.iterations
+            .iter()
+            .map(|m| m.response_text.clone())
+            .collect()
+    };
+    let same_run = |c: &&CellResult| {
+        c.model == cell.model && c.num_ctx == cell.num_ctx && c.prompt_name == cell.prompt_name
+    };
+    let multi_target = cells.iter().any(|c| c.target.label != first.target.label);
+    let reference = cells
+        .iter()
+        .filter(same_run)
+        .find(|c| c.target.label == first.target.label);
+    match reference {
+        Some(r) if multi_target => quality::cell_quality(
+            &texts(r),
+            &texts(cell),
+            cell.target.label == first.target.label,
+            &first.target.label,
+        ),
+        _ => serde_json::Value::Null,
+    }
 }
 
 #[tokio::main]
@@ -2551,6 +2585,7 @@ fn save_json(
                 "load_error": c.load_error,
                 "iteration_errors": c.iteration_errors,
                 "settings": c.settings,
+                "quality": cell_quality_in(cells, c),
                 "stats": serde_json::Value::Object(stats_map),
                 "iterations": iterations_json,
             })
