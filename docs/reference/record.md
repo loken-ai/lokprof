@@ -164,7 +164,7 @@ It does not say who wrote the record.
 
 | Cell | `settings` |
 |---|---|
-| text, vision and embedding | `{"keep_alive": "30m"}` |
+| text, vision and embedding | `{"keep_alive": "30m", "running_format": "bf16"}`, `running_format` is `null` when the server does not say |
 | image | `{"size": [1024, 1024], "seed": 42}` |
 | speech | `{"voice": "alloy"}` |
 | music | `{"seconds": 5.0}` |

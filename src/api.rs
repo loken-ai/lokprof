@@ -988,6 +988,17 @@ impl BenchClient {
             .unwrap_or_default()
     }
 
+    /// The format the server runs `model` in, as `/api/ps` reports it under `details`.
+    /// A float format (`f32`, `f16`, `bf16`) names the type the weights run in.
+    /// A quantized model names its block formats, joined with `+` when it mixes several.
+    /// `None` when the server does not say, which is the case of every server but loken.
+    pub async fn running_format(&self, model: &str) -> Option<String> {
+        let url = format!("{}/api/ps", self.base_url);
+        let resp = self.http.get(&url).send().await.ok()?;
+        let body: serde_json::Value = resp.json().await.ok()?;
+        running_format_of(&body, model)
+    }
+
     /// Unload any loaded model by sending empty prompt with keep_alive: 0.
     /// No-op for vLLM: the model is resident for the server's lifetime and
     /// there is no unload API.
@@ -1954,5 +1965,76 @@ mod image_tests {
         );
         let r = tls.generate_stream("m", "p", 8, None, None, None).await;
         assert!(r.unwrap_err().contains("https"));
+    }
+}
+
+/// The `running_format` of `model` in a `/api/ps` body, which loken puts under `details`.
+fn running_format_of(body: &serde_json::Value, model: &str) -> Option<String> {
+    body.get("models")?
+        .as_array()?
+        .iter()
+        .find(|m| m.get("name").and_then(|n| n.as_str()) == Some(model))?
+        .get("details")?
+        .get("running_format")?
+        .as_str()
+        .map(String::from)
+}
+
+#[cfg(test)]
+mod running_format_tests {
+    use super::running_format_of;
+
+    #[test]
+    fn the_format_is_read_from_the_details_of_the_model() {
+        let body = serde_json::json!({"models": [
+            {"name": "a:1", "details": {"running_format": "q8"}},
+            {"name": "b:1", "details": {"running_format": "bf16"}},
+        ]});
+        assert_eq!(running_format_of(&body, "b:1").as_deref(), Some("bf16"));
+        assert_eq!(running_format_of(&body, "c:1"), None);
+    }
+
+    /// The body loken sends for a model that is loaded.
+    const LOKEN_PS: &str = r#"{"models":[{"name":"Qwen/Qwen3-0.6B","model":"Qwen/Qwen3-0.6B","size":1503300328,"digest":"0000000000000000000000000000000000000000","details":{"format":"safetensors","family":"qwen3","parameter_size":"752M","running_format":"bf16"},"expires_at":"2026-11-12T00:15:37.352523858+00:00","size_vram":1503300328,"context_length":40960}]}"#;
+
+    #[test]
+    fn the_body_loken_sends_gives_its_running_format() {
+        let body: serde_json::Value = serde_json::from_str(LOKEN_PS).unwrap();
+        assert_eq!(
+            running_format_of(&body, "Qwen/Qwen3-0.6B").as_deref(),
+            Some("bf16")
+        );
+    }
+
+    #[test]
+    fn a_joined_value_is_kept_whole() {
+        let body = serde_json::json!({"models": [
+            {"name": "a:1", "details": {"format": "gguf", "running_format": "q4_K+q6_K"}},
+        ]});
+        assert_eq!(
+            running_format_of(&body, "a:1").as_deref(),
+            Some("q4_K+q6_K")
+        );
+    }
+
+    #[test]
+    fn the_format_of_the_file_is_not_the_running_format() {
+        let body = serde_json::json!({"models": [
+            {"name": "a:1", "details": {"format": "safetensors"}},
+        ]});
+        assert_eq!(running_format_of(&body, "a:1"), None);
+    }
+
+    #[test]
+    fn a_model_without_details_gives_none() {
+        let body = serde_json::json!({"models": [{"name": "a:1"}]});
+        assert_eq!(running_format_of(&body, "a:1"), None);
+        assert_eq!(running_format_of(&serde_json::json!({}), "a:1"), None);
+    }
+
+    #[test]
+    fn a_server_that_says_nothing_gives_none() {
+        let body = serde_json::json!({"models": [{"name": "a:1", "details": {}}]});
+        assert_eq!(running_format_of(&body, "a:1"), None);
     }
 }
