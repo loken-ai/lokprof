@@ -22,6 +22,7 @@ mod host_sampler;
 mod load;
 mod provenance;
 mod quality;
+mod replay;
 mod stats;
 
 use api::{BenchClient, IterationMetrics, Modality, Protocol};
@@ -218,6 +219,12 @@ struct Args {
     /// Each step sends `--iterations` requests, so a step needs at least 8 to be read.
     #[arg(long)]
     load: Option<String>,
+
+    /// Replay a recorded session: a file of JSON lines, one request each, sent at the
+    /// offset it holds. The record names the file by its digest. Use `--stream` for the
+    /// time to first token and the time per output token.
+    #[arg(long)]
+    replay: Option<String>,
 
     /// Number of warmup iterations (not counted in stats)
     #[arg(short, long, default_value = "1")]
@@ -422,8 +429,17 @@ async fn main() {
         std::process::exit(1);
     }
 
-    // Resolve prompts: --prompt overrides everything
-    let prompt_specs: Vec<(String, &str)> = if let Some(custom) = args.prompt.as_deref() {
+    let trace = args.replay.as_deref().map(|path| {
+        replay::Trace::load(path).unwrap_or_else(|e| {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        })
+    });
+
+    // Resolve prompts: --replay, then --prompt, override everything
+    let prompt_specs: Vec<(String, &str)> = if let Some(t) = trace.as_ref() {
+        vec![(format!("replay:{}", &t.digest[..12]), "")]
+    } else if let Some(custom) = args.prompt.as_deref() {
         vec![("custom".to_string(), custom)]
     } else {
         let mut out = Vec::new();
@@ -921,6 +937,20 @@ async fn main() {
                         },
                         // Text and vision keep the token path (vision rides it with an attached
                         // image).
+                        _ if trace.is_some() => {
+                            run_replay_cell(
+                                &clients[idx],
+                                target,
+                                model,
+                                num_ctx,
+                                prompt_name,
+                                trace.as_ref().expect("guarded by the arm"),
+                                args.max_tokens,
+                                args.stream,
+                                args.carbon_intensity,
+                            )
+                            .await
+                        }
                         _ if load_profile.is_some() => {
                             run_load_cell(
                                 &clients[idx],
@@ -1028,6 +1058,7 @@ async fn main() {
             idle_energy.as_ref(),
             &subjects,
             &temps_at_start,
+            trace.as_ref(),
         );
     }
     if let Some(ref path) = args.output_csv {
@@ -2132,6 +2163,111 @@ async fn run_load_cell<'a>(
     cell
 }
 
+/// Replay a trace: every request goes at its recorded offset, and the cell holds what each
+/// one measured, in trace order. Latency counts from the send, as in a sequential run.
+#[allow(clippy::too_many_arguments)]
+async fn run_replay_cell<'a>(
+    client: &BenchClient,
+    target: &'a ServerTarget,
+    model: &str,
+    num_ctx: usize,
+    prompt_name: &str,
+    trace: &replay::Trace,
+    max_tokens: usize,
+    stream: bool,
+    carbon_intensity: f64,
+) -> CellResult<'a> {
+    println!(
+        "  [{}] Replay of {} requests over {} sessions...",
+        target.label,
+        trace.requests.len(),
+        trace.sessions()
+    );
+    let answers = replay::run(&trace.requests, |r| async move {
+        let tokens = r.max_tokens.unwrap_or(max_tokens);
+        let session = r.session.as_deref();
+        if stream {
+            client
+                .generate_stream(model, &r.prompt, tokens, Some(num_ctx), None, session)
+                .await
+        } else {
+            client
+                .generate(model, &r.prompt, tokens, Some(num_ctx), None, session)
+                .await
+        }
+    })
+    .await;
+    let mut iterations = Vec::new();
+    let mut iteration_errors = Vec::new();
+    for (r, answer) in trace.requests.iter().zip(answers) {
+        match answer {
+            Ok(m) => iterations.push(m),
+            Err(e) => {
+                eprintln!("    line {}: ERROR -- {}", r.line, e);
+                iteration_errors.push(format!("line {}: {e}", r.line));
+            }
+        }
+    }
+    let mut stats = Vec::new();
+    let mut push = |label: &str, unit: &str, values: Vec<f64>| {
+        if let Some(s) = Stats::compute(label, unit, &values) {
+            stats.push(s);
+        }
+    };
+    push(
+        "TTFT",
+        "ms",
+        iterations.iter().filter_map(|m| m.ttft_ms).collect(),
+    );
+    push(
+        "Decode ms/tok",
+        "ms",
+        iterations
+            .iter()
+            .filter_map(|m| m.decode_ms_per_token)
+            .collect(),
+    );
+    push(
+        "E2E latency",
+        "ms",
+        iterations.iter().map(|m| m.e2e_latency_ms).collect(),
+    );
+    push(
+        "Tokens generated",
+        "count",
+        iterations
+            .iter()
+            .filter_map(|m| m.tokens_generated.map(|t| t as f64))
+            .collect(),
+    );
+    let first_response_preview = iterations
+        .iter()
+        .find_map(|m| m.response_preview.clone().filter(|s| !s.is_empty()));
+    let load_error = iterations
+        .is_empty()
+        .then(|| "no request of the trace was answered".to_string());
+    CellResult {
+        target,
+        model: model.to_string(),
+        model_fingerprint: None,
+        num_ctx,
+        prompt_name: prompt_name.to_string(),
+        prompt_chars: trace.requests.iter().map(|r| r.prompt.len()).sum(),
+        gpu_samples_per_iter: vec![Vec::new(); iterations.len()],
+        host_samples_per_iter: vec![None; iterations.len()],
+        energy_per_iter: vec![None; iterations.len()],
+        iterations,
+        carbon_intensity,
+        load_time_ms: None,
+        stats,
+        first_response_preview,
+        coherence_pass: None,
+        load_error,
+        iteration_errors,
+        settings: serde_json::json!({ "replay": trace.settings() }),
+    }
+}
+
 /// Records the request timeout among the settings of a cell, whatever it measured.
 fn record_timeout(settings: &mut serde_json::Value, seconds: u64) {
     if settings.is_null() {
@@ -2505,6 +2641,7 @@ fn save_json(
     idle_energy: Option<&EnergyWindow>,
     subjects: &serde_json::Map<String, serde_json::Value>,
     temps_at_start: &[u32],
+    trace: Option<&replay::Trace>,
 ) {
     let results: Vec<serde_json::Value> = cells
         .iter()
@@ -2610,7 +2747,8 @@ fn save_json(
             "streaming": args.stream,
             "max_tokens": args.max_tokens,
             "unique_prompt": args.unique_prompt,
-            "prefix_reuse_offered": args.session_id.is_some(),
+            "prefix_reuse_offered": args.session_id.is_some()
+                || trace.is_some_and(|t| t.sessions() > 0),
             // Observed by the runner rather than asserted by whoever launched it. The
             // protocol says one engine at a time on cards at idle, the campaign enforces it, and
             // until now nothing wrote down that they had - so a report taken under the rule and
@@ -2644,6 +2782,9 @@ fn save_json(
             "session_id": args.session_id,
             "unique_prompt": args.unique_prompt,
             "num_gpu": args.num_gpu,
+            // The trace a replay sent, by the digest of its bytes: 2 records with the same
+            // digest were offered the same requests. `null` outside a replay.
+            "replay_trace_sha256": trace.map(|t| t.digest.as_str()),
         },
         "idle_energy_baseline": idle_energy.map(|w| w.idle_json()),
         "results": results,

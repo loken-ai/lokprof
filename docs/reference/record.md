@@ -81,7 +81,7 @@ When no card carries a `uuid`, `driver` is left out, and `hardware_id` is derive
 | Field | Holds |
 |---|---|
 | `iterations`, `warmup`, `streaming`, `max_tokens`, `unique_prompt` | the options of the run |
-| `prefix_reuse_offered` | `true` when `--session-id` was given |
+| `prefix_reuse_offered` | `true` when `--session-id` was given, or when the trace of `--replay` names a session |
 | `engines_seen` | the engine processes running when the record was written, among `ollama`, `lokend`, `vllm` and `llama-server` |
 | `gpu_temps_c_at_start` | the temperature of each NVIDIA card before the first request, in degrees Celsius |
 | `cards_by_uuid` | always `null`: which cards each engine was given is decided at its launch, outside lokprof |
@@ -98,6 +98,7 @@ When no card carries a `uuid`, `driver` is left out, and `hardware_id` is derive
 | `energy_measure` | `false` with `--no-energy` |
 | `carbon_intensity_gco2_per_kwh` | `--carbon-intensity` |
 | `session_id`, `num_gpu` | `--session-id` and `--num-gpu`, or `null` |
+| `replay_trace_sha256` | the SHA-256 of the file of `--replay`, in hexadecimal, or `null` |
 
 The record does not hold `--concurrency`, `--modality`, `--require-substr`, `--image` or `--audio`.
 
@@ -169,6 +170,7 @@ It does not say who wrote the record.
 | speech | `{"voice": "alloy"}` |
 | music | `{"seconds": 5.0}` |
 | transcription | `{}` |
+| replay | `{"replay": {"trace_sha256": "...", "requests": 5, "sessions": 2, "duration_ms": 400.0}}` |
 | a cell that could not load | `null` |
 
 Every cell that measured holds `request_timeout_s` too: the seconds a request may take, from `--request-timeout`.

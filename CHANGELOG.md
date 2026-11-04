@@ -7,6 +7,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Replay: send a recorded session at its timing and name the trace by its digest.
 - Modalities: measure an embedding model.
 - Load: offer requests at a constant or a random rate and find the rate served.
 - Records: hold the request timeout of every cell.

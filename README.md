@@ -33,7 +33,7 @@ Without it, every rate is tokens over the whole request, prefill included.
 | [Install](docs/start/install.md) | Build lokprof |
 | [First run](docs/start/first-run.md) | Measure 1 server and save a record |
 | [Concepts](docs/start/concepts.md) | Learn the terms: target, cell, sweep, window |
-| [Guides](docs/guides/compare-engines.md) | Do 1 task: compare servers, measure energy, vision, media, concurrency, load, a baseline |
+| [Guides](docs/guides/compare-engines.md) | Do 1 task: compare servers, measure energy, vision, media, concurrency, load, replay, a baseline |
 | [Options](docs/reference/options.md) | Look up a command line option and its default |
 | [Record](docs/reference/record.md) | Read the JSON record and the CSV file |
 
