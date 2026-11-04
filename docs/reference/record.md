@@ -122,6 +122,7 @@ The record does not hold `--concurrency`, `--modality`, `--require-substr`, `--i
 |---|---|
 | `command` | the command line, with each URL, path and file name replaced by `<place>` |
 | `binary_sha256` | the SHA-256 of the lokprof binary that ran, or `null` when it cannot be read |
+| `engine_binaries` | 1 object per engine process running on the machine, among `ollama`, `lokend`, `vllm` and `llama-server`: `name`, and `sha256`, the SHA-256 of the file it runs, or `null` when it cannot be read. A file shared by several processes is listed once. Empty when no engine runs locally |
 | `config_sha256` | the SHA-256 of the `config` object above, as it was written |
 
 The record names no host, no home directory and no file.

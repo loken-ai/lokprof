@@ -12,6 +12,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Load: offer requests at a constant or a random rate and find the rate served.
 - Records: hold the request timeout of every cell.
 - Records: hold the command, the binary hash and a seal that detects a change.
+- Records: hold the hash of the binary of each engine running on the machine.
 - Records: say which format the server runs the model in.
 - Records: hold the digest of the model file the server lists.
 - Records: hold how far each engine's answer departs from the first engine's.

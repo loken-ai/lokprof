@@ -273,11 +273,22 @@ fn gpus() -> Vec<Gpu> {
 /// Names rather than a verdict. "Alone" is a judgement about which of them was the target, and
 /// the reader can make it from a list they can check.
 pub fn engines_seen() -> Vec<String> {
+    let mut seen: Vec<String> = engine_processes(std::path::Path::new("/proc"))
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    seen.dedup();
+    seen
+}
+
+/// The engine processes under a `/proc` tree, as pairs of name and the file the process runs,
+/// sorted by name then by path. A process whose `exe` cannot be read has no path.
+fn engine_processes(proc_root: &std::path::Path) -> Vec<(String, Option<std::path::PathBuf>)> {
     const ENGINES: [&str; 4] = ["ollama", "lokend", "vllm", "llama-server"];
-    let Ok(dir) = std::fs::read_dir("/proc") else {
+    let Ok(dir) = std::fs::read_dir(proc_root) else {
         return Vec::new();
     };
-    let mut seen: Vec<String> = Vec::new();
+    let mut found: Vec<(String, Option<std::path::PathBuf>)> = Vec::new();
     for entry in dir.flatten() {
         let path = entry.path();
         let Some(pid) = path.file_name().and_then(|f| f.to_str()) else {
@@ -290,12 +301,44 @@ pub fn engines_seen() -> Vec<String> {
             continue;
         };
         let comm = comm.trim().to_string();
-        if ENGINES.contains(&comm.as_str()) && !seen.contains(&comm) {
-            seen.push(comm);
+        if !ENGINES.contains(&comm.as_str()) {
+            continue;
+        }
+        let exe = std::fs::read_link(path.join("exe")).ok();
+        let item = (comm, exe);
+        if !found.contains(&item) {
+            found.push(item);
         }
     }
-    seen.sort();
-    seen
+    found.sort();
+    found
+}
+
+/// The binary of each engine running on this machine: its name and the SHA-256 of the file it
+/// runs, or `null` when the file cannot be read.
+/// Each distinct file is hashed once.
+pub fn engine_binaries() -> serde_json::Value {
+    engine_binaries_in(std::path::Path::new("/proc"))
+}
+
+fn engine_binaries_in(proc_root: &std::path::Path) -> serde_json::Value {
+    let mut hashed: std::collections::HashMap<std::path::PathBuf, Option<String>> =
+        std::collections::HashMap::new();
+    let items: Vec<serde_json::Value> = engine_processes(proc_root)
+        .into_iter()
+        .map(|(name, exe)| {
+            let sha = exe
+                .map(|p| {
+                    hashed
+                        .entry(p.clone())
+                        .or_insert_with(|| file_sha256(&p))
+                        .clone()
+                })
+                .unwrap_or(None);
+            serde_json::json!({ "name": name, "sha256": sha })
+        })
+        .collect();
+    serde_json::Value::Array(items)
 }
 
 /// What the cards read before the first request, in whole degrees.
@@ -429,13 +472,14 @@ pub fn file_sha256(path: &std::path::Path) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
-/// What reproduces the run: the command, the binary that ran it and a digest of the
-/// configuration the cells were measured under.
+/// What reproduces the run: the command, the binary that ran it, the binaries of the engines
+/// running on this machine and a digest of the configuration the cells were measured under.
 pub fn recipe(command: Vec<String>, config: &serde_json::Value) -> serde_json::Value {
     let binary = std::env::current_exe().ok().and_then(|p| file_sha256(&p));
     serde_json::json!({
         "command": command,
         "binary_sha256": binary,
+        "engine_binaries": engine_binaries(),
         "config_sha256": format!("{:x}", Sha256::digest(config.to_string().as_bytes())),
     })
 }
@@ -513,6 +557,95 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn the_config_digest_ignores_key_order() {
+        let a = serde_json::json!({ "models": ["m"], "iterations": 3 });
+        let b = serde_json::json!({ "iterations": 3, "models": ["m"] });
+        let c = serde_json::json!({ "iterations": 4, "models": ["m"] });
+        let digest = |v: &serde_json::Value| recipe(Vec::new(), v)["config_sha256"].clone();
+        assert_eq!(digest(&a), digest(&b));
+        assert_ne!(digest(&a), digest(&c));
+        let expected = format!("{:x}", Sha256::digest(a.to_string().as_bytes()));
+        assert_eq!(digest(&a), serde_json::Value::String(expected));
+    }
+
+    #[test]
+    fn a_file_digest_is_the_sha256_of_its_bytes() {
+        let dir = scratch("file-digest");
+        let file = dir.join("data.bin");
+        std::fs::write(&file, b"abc").unwrap();
+        assert_eq!(
+            file_sha256(&file).as_deref(),
+            Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        );
+        assert_eq!(file_sha256(&dir.join("absent")), None);
+    }
+
+    #[test]
+    fn the_recipe_hashes_the_running_binary() {
+        let r = recipe(vec!["lokprof".into()], &serde_json::json!({}));
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(
+            r["binary_sha256"].as_str().map(String::from),
+            file_sha256(&exe)
+        );
+        assert_eq!(r["command"], serde_json::json!(["lokprof"]));
+    }
+
+    /// A fake `/proc` with 2 engines running the same file and 1 process that is no engine.
+    #[test]
+    fn engine_binaries_are_hashed_once_per_file() {
+        let root = scratch("fake-proc");
+        let exe = root.join("engine-file");
+        std::fs::write(&exe, b"abc").unwrap();
+        for (pid, comm) in [("11", "lokend"), ("12", "lokend"), ("13", "bash")] {
+            let p = root.join(pid);
+            std::fs::create_dir_all(&p).unwrap();
+            std::fs::write(p.join("comm"), format!("{comm}\n")).unwrap();
+            let _ = std::os::unix::fs::symlink(&exe, p.join("exe"));
+        }
+        let got = engine_binaries_in(&root);
+        assert_eq!(
+            got,
+            serde_json::json!([{
+                "name": "lokend",
+                "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            }])
+        );
+    }
+
+    #[test]
+    fn a_sealed_record_does_not_depend_on_key_order() {
+        let a = sealed(serde_json::json!({ "x": 1, "y": { "b": 2, "a": 3 } }));
+        let b = sealed(serde_json::json!({ "y": { "a": 3, "b": 2 }, "x": 1 }));
+        assert_eq!(a, b);
+        assert!(seal_holds(&a));
+    }
+
+    #[test]
+    fn a_one_byte_change_breaks_the_seal() {
+        let text = sealed(serde_json::json!({ "results": [{ "tok_s": 100.5 }] }));
+        assert!(seal_holds(&text));
+        assert!(!seal_holds(&text.replace("100.5", "100.6")));
+        let seal = serde_json::from_str::<serde_json::Value>(&text).unwrap()["seal"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut other = seal.clone();
+        other.replace_range(0..1, if seal.starts_with('a') { "b" } else { "a" });
+        assert!(!seal_holds(&text.replacen(&seal, &other, 1)));
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-scratch")
+            .join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     /// A machine described by the cards a server lists: the card of another vendor is named as
     /// the server names it, and the hardware id follows the cards that were measured.
