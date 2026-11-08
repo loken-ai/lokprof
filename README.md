@@ -29,13 +29,13 @@ Without it, every rate is tokens over the whole request, prefill included.
 
 | Page | Read it to |
 |---|---|
-| [Overview](docs/start/overview.md) | See what lokprof measures and what it records |
-| [Install](docs/start/install.md) | Build lokprof |
-| [First run](docs/start/first-run.md) | Measure 1 server and save a record |
-| [Concepts](docs/start/concepts.md) | Learn the terms: target, cell, sweep, window |
-| [Guides](docs/guides/compare-engines.md) | Do 1 task: compare servers, measure energy, vision, media, concurrency, load, replay, a baseline |
-| [Options](docs/reference/options.md) | Look up a command line option and its default |
-| [Record](docs/reference/record.md) | Read the JSON record and the CSV file |
+| [Overview](https://loken-ai.github.io/lokprof/overview/) | See what lokprof measures and what it records |
+| [Install](https://loken-ai.github.io/lokprof/install/) | Build lokprof |
+| [First run](https://loken-ai.github.io/lokprof/first-run/) | Measure 1 server and save a record |
+| [Concepts](https://loken-ai.github.io/lokprof/concepts/) | Learn the terms: target, cell, sweep, window |
+| [Guides](https://loken-ai.github.io/lokprof/compare-engines/) | Do 1 task: compare servers, measure energy, vision, media, concurrency, load, replay, a baseline |
+| [Options](https://loken-ai.github.io/lokprof/options/) | Look up a command line option and its default |
+| [Record](https://loken-ai.github.io/lokprof/record/) | Read the JSON record and the CSV file |
 
 A fair comparison between engines also needs a protocol: one engine at a time, the same cards, a thermal gate.
 The [benchmarks](https://github.com/loken-ai/benchmarks) repository runs that campaign with lokprof and publishes the results.

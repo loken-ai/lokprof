@@ -29,6 +29,8 @@ perf.data*
 *.webm
 *.mid
 *.midi
+# The narrations of the pages of the documentation.
+!docs/**/narration/*.mp3
 
 # Editor and tooling state.
 *~
