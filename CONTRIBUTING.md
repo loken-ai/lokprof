@@ -45,8 +45,8 @@ A test that needs a server starts a local one on a free port.
 
 ## Documentation
 
-The user documentation lives in `docs/`, as Markdown pages that the family site builds.
-A page in `docs/start`, `docs/guides` or `docs/reference` names no source file.
+The user documentation lives in the `loken-ai.github.io` repository, under `docs/site/05-lokprof`.
+A page names no source file.
 
 The script that makes the processor's energy readable is `scripts/enable-energy.sh` in the [benchmarks](https://github.com/loken-ai/benchmarks) repository.
 The user pages name it as the command `enable-energy.sh`.

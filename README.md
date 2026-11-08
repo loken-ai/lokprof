@@ -17,7 +17,6 @@ Without it, every rate is tokens over the whole request, prefill included.
 
 | What | State |
 |---|---|
-| Version | 0.4.1 |
 | Install | build from source with `cargo`, no prebuilt archive |
 | Text sweeps | Ollama, loken and vLLM |
 | Vision sweeps | Ollama and loken |
