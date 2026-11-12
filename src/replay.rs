@@ -4,6 +4,14 @@
 //! The arrivals are fixed by the file, whatever the engine has answered, like the offered load.
 //! The record names the trace by the SHA-256 of its bytes, so 2 engines replayed on the same
 //! trace are known to have been offered the same requests.
+//!
+//! A line holds `offset_ms`, an optional `session`, a `prompt` or a list of `messages`
+//! (`role` and `content`), and an optional `max_tokens`.
+//! The requests of a session grow: the prompt sent is the parts of the session so far, joined
+//! by an empty line.
+//! A line of a session therefore holds the new parts only.
+//!
+//! `scripts/session_to_trace.py` writes a trace from the log of an agent session.
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -226,6 +234,27 @@ mod tests {
             .find(|r| r.session.as_deref() == Some("b"))
             .unwrap();
         assert!(!b.prompt.starts_with(&a[0].prompt));
+    }
+
+    const AGENT: &str = include_str!("../tests/agent_trace.jsonl");
+
+    #[test]
+    fn an_agent_session_grows_its_prefix_request_after_request() {
+        let t = Trace::parse(AGENT.as_bytes()).unwrap();
+        assert_eq!(t.sessions(), 2);
+        assert_eq!(t.requests[0].offset_ms, 0.0);
+        let a: Vec<&Planned> = t
+            .requests
+            .iter()
+            .filter(|r| r.session.as_deref() == Some("a"))
+            .collect();
+        assert_eq!(a.len(), 4);
+        for pair in a.windows(2) {
+            assert!(pair[1].prompt.starts_with(&pair[0].prompt));
+            assert!(pair[1].prompt.len() > pair[0].prompt.len());
+        }
+        assert!(a[1].prompt.contains("assistant: I will search"));
+        assert!(a[1].prompt.contains("tool: src/config.rs:12"));
     }
 
     #[test]

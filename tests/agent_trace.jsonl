@@ -1,0 +1,5 @@
+{"offset_ms": 0.0, "session": "a", "messages": [{"role": "system", "content": "You are a coding agent in a repository."}, {"role": "user", "content": "Find where the config is read and explain it."}]}
+{"offset_ms": 4200.0, "session": "a", "messages": [{"role": "assistant", "content": "I will search for the loader. Calling grep for 'config'."}, {"role": "tool", "content": "src/config.rs:12: pub fn load() -> Config\nsrc/main.rs:40: let cfg = config::load();"}]}
+{"offset_ms": 9300.0, "session": "a", "messages": [{"role": "assistant", "content": "The loader is config::load in src/config.rs. Reading it."}, {"role": "tool", "content": "pub fn load() -> Config { Config::from_file(path()) }"}]}
+{"offset_ms": 14900.0, "session": "b", "messages": [{"role": "system", "content": "You are a review agent."}, {"role": "user", "content": "Review this diff: a one-line change in src/lib.rs."}]}
+{"offset_ms": 59800.0, "session": "a", "messages": [{"role": "assistant", "content": "The config is read from a file whose path path() gives."}, {"role": "user", "content": "Now add a test for the loader."}]}

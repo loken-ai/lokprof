@@ -15,6 +15,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Records: hold the hash of the binary of each engine running on the machine.
 - Records: say which format the server runs the model in.
 - Records: hold the digest of the model file the server lists.
+- Replay: turn the log of an agent session into a trace.
 - Records: hold how far each engine's answer departs from the first engine's.
 
 ## [0.5.0] - 2026-11-02
