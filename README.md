@@ -31,6 +31,9 @@ A record says how far each answer departs from the answers of a reference.
 | Option | What it does | Standard |
 |---|---|---|
 | `--top-logprobs N` | Asks each engine for the log-probability of every token and of the N most likely ones. The record holds each answer and these figures, token by token. | The `top_logprobs` field of the [OpenAI chat completions](https://platform.openai.com/docs/api-reference/chat/create), from 0 to 20 |
+| `--quality-base FILE` | Compares the answers with those of a record written with `--top-logprobs`, in place of the first target of the run. The value names the record by `reference_record_sha256`. | The `--kl-divergence-base FILE` of [llama.cpp's perplexity tool](https://github.com/ggml-org/llama.cpp/tree/master/tools/perplexity): the file of a reference run that a later run compares with |
+
+The reference of a cell is the first target of the reference with the same model, context and prompt.
 
 | Engine | Route | Fields sent |
 |---|---|---|

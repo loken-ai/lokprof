@@ -19,6 +19,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Records: hold how far each engine's answer departs from the first engine's.
 - Records: hold each answer and its log-probabilities with --top-logprobs.
 - Records: hold how far the log-probabilities of each answer depart from the reference's.
+- Quality: compare the answers with those of a record given by --quality-base.
 
 ## [0.5.0] - 2026-11-02
 

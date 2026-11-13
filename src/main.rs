@@ -291,6 +291,12 @@ struct Args {
     #[arg(long, value_parser = clap::value_parser!(u8).range(0..=20))]
     top_logprobs: Option<u8>,
 
+    /// A record whose answers every `quality` value compares with, in place of the first
+    /// target of the run: the reference run, as the base file of a KL divergence run names it.
+    /// A run with `--top-logprobs` writes such a record.
+    #[arg(long)]
+    quality_base: Option<String>,
+
     /// Coherence-gate substring. After every cell prints, if --image and
     /// --require-substr are both set, fail any iteration whose response
     /// preview doesn't contain (case-insensitive) at least one of the
@@ -387,16 +393,17 @@ struct CellResult<'a> {
 /// The value names that target as `reference_target`.
 /// `null` for a cell with no other target to compare with, or no reference cell.
 ///
+/// A `base` record replaces the first target: its first target with the same model, context
+/// and prompt is the reference, and the value names the record by `reference_record_sha256`.
+///
 /// When the run asked for log-probabilities, `logprobs` holds their departure.
 /// It is `null` when no iteration pairs them, and `logprobs_reason` then says why.
 fn cell_quality_in(
     cells: &[CellResult],
     cell: &CellResult,
     asked_logprobs: bool,
+    base: Option<&quality::Base>,
 ) -> serde_json::Value {
-    let Some(first) = cells.first() else {
-        return serde_json::Value::Null;
-    };
     let texts = |c: &CellResult| -> Vec<String> {
         c.iterations
             .iter()
@@ -405,6 +412,25 @@ fn cell_quality_in(
     };
     let logprobs = |c: &CellResult| -> Vec<Option<Vec<quality::TokenLogprob>>> {
         c.iterations.iter().map(|m| m.logprobs.clone()).collect()
+    };
+    if let Some(base) = base {
+        let Some(r) = base.cell(&cell.model, cell.num_ctx, &cell.prompt_name) else {
+            return serde_json::Value::Null;
+        };
+        let mut value = quality::cell_quality(&r.texts, &texts(cell), false, &r.target);
+        if value.is_object() {
+            value["reference_record_sha256"] = base.sha256.clone().into();
+            if asked_logprobs {
+                add_logprob_quality(
+                    &mut value,
+                    quality::logprob_quality(&r.logprobs, &logprobs(cell)),
+                );
+            }
+        }
+        return value;
+    }
+    let Some(first) = cells.first() else {
+        return serde_json::Value::Null;
     };
     let same_run = |c: &&CellResult| {
         c.model == cell.model && c.num_ctx == cell.num_ctx && c.prompt_name == cell.prompt_name
@@ -471,6 +497,19 @@ async fn main() {
             eprintln!("Error: {e}");
             std::process::exit(1);
         })
+    });
+
+    let quality_base = args.quality_base.as_deref().map(|path| {
+        let base = quality::Base::load(path).unwrap_or_else(|e| {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        });
+        // A record written before the seal existed carries none and is read as it is.
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if text.contains("\"seal\"") && !provenance::seal_holds(&text) {
+            eprintln!("  WARNING: --quality-base was changed after lokprof wrote it");
+        }
+        base
     });
 
     // Resolve prompts: --replay, then --prompt, override everything
@@ -1097,6 +1136,7 @@ async fn main() {
             &subjects,
             &temps_at_start,
             trace.as_ref(),
+            quality_base.as_ref(),
         );
     }
     if let Some(ref path) = args.output_csv {
@@ -2672,6 +2712,7 @@ fn print_sweep_comparison(cells: &[CellResult], target_a: &ServerTarget, target_
 
 // JSON output -----------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn save_json(
     path: &str,
     args: &Args,
@@ -2680,6 +2721,7 @@ fn save_json(
     subjects: &serde_json::Map<String, serde_json::Value>,
     temps_at_start: &[u32],
     trace: Option<&replay::Trace>,
+    quality_base: Option<&quality::Base>,
 ) {
     let results: Vec<serde_json::Value> = cells
         .iter()
@@ -2768,7 +2810,7 @@ fn save_json(
                 "load_error": c.load_error,
                 "iteration_errors": c.iteration_errors,
                 "settings": c.settings,
-                "quality": cell_quality_in(cells, c, args.top_logprobs.is_some()),
+                "quality": cell_quality_in(cells, c, args.top_logprobs.is_some(), quality_base),
                 "stats": serde_json::Value::Object(stats_map),
                 "iterations": iterations_json,
             })
@@ -2833,6 +2875,9 @@ fn save_json(
             "replay_trace_sha256": trace.map(|t| t.digest.as_str()),
             // The alternatives asked for at each position. `null` when no log-probability was.
             "top_logprobs": args.top_logprobs,
+            // The record whose answers the quality values compare with, by the digest of its
+            // bytes. `null` when the first target of the run is the reference.
+            "quality_base_sha256": quality_base.map(|b| b.sha256.as_str()),
         },
         "idle_energy_baseline": idle_energy.map(|w| w.idle_json()),
         "results": results,

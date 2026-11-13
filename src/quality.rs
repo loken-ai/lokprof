@@ -221,9 +221,155 @@ pub fn logprob_quality(
     }))
 }
 
+/// The answers of 1 cell of a recorded run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BaseCell {
+    pub target: String,
+    pub model: String,
+    pub num_ctx: u64,
+    pub prompt: String,
+    /// The answers in iteration order.
+    pub texts: Vec<String>,
+    /// The log-probabilities of each answer, `None` where the record holds none.
+    pub logprobs: Vec<Option<Vec<TokenLogprob>>>,
+}
+
+/// A recorded run whose answers are the reference of every `quality` value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Base {
+    /// The SHA-256 of the bytes of the record.
+    pub sha256: String,
+    pub cells: Vec<BaseCell>,
+}
+
+impl Base {
+    /// Reads the record at `path`.
+    pub fn load(path: &str) -> Result<Self, String> {
+        use sha2::{Digest, Sha256};
+        let bytes = std::fs::read(path).map_err(|e| format!("--quality-base {path}: {e}"))?;
+        let record: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("--quality-base {path}: not JSON: {e}"))?;
+        Self::from_record(&record, format!("{:x}", Sha256::digest(&bytes)))
+            .map_err(|e| format!("--quality-base {path}: {e}"))
+    }
+
+    /// The cells of a record, with the answers each holds.
+    ///
+    /// A record without answers has cells without texts, and is refused as a reference.
+    pub fn from_record(record: &serde_json::Value, sha256: String) -> Result<Self, String> {
+        let results = record["results"]
+            .as_array()
+            .ok_or("the file is not a lokprof record: it holds no results")?;
+        let cells: Vec<BaseCell> = results.iter().map(base_cell).collect();
+        if cells.iter().all(|c| c.texts.is_empty()) {
+            return Err("the record holds no answers: write it with --top-logprobs".to_string());
+        }
+        Ok(Self { sha256, cells })
+    }
+
+    /// The reference of a cell: the first target of the record with the same model, context
+    /// and prompt.
+    pub fn cell(&self, model: &str, num_ctx: usize, prompt: &str) -> Option<&BaseCell> {
+        self.cells
+            .iter()
+            .find(|c| c.model == model && c.num_ctx == num_ctx as u64 && c.prompt == prompt)
+    }
+}
+
+/// The answers 1 result of a record holds.
+/// The answers stop at the first iteration without a text.
+fn base_cell(result: &serde_json::Value) -> BaseCell {
+    let field = |k: &str| result[k].as_str().unwrap_or_default().to_string();
+    let answers: Vec<(String, Option<Vec<TokenLogprob>>)> = result["iterations"]
+        .as_array()
+        .map(|its| {
+            its.iter()
+                .map_while(|it| {
+                    let text = it["response_text"].as_str()?.to_string();
+                    let lps = serde_json::from_value(it["logprobs"].clone())
+                        .ok()
+                        .flatten();
+                    Some((text, lps))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let (texts, logprobs) = answers.into_iter().unzip();
+    BaseCell {
+        target: field("target"),
+        model: field("model"),
+        num_ctx: result["num_ctx"].as_u64().unwrap_or_default(),
+        prompt: field("prompt"),
+        texts,
+        logprobs,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A result as a record of this version writes it, with `--top-logprobs`.
+    fn recorded_result(target: &str, texts: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "target": target, "model": "m", "num_ctx": 4096, "prompt": "short",
+            "quality": null,
+            "iterations": texts.iter().enumerate().map(|(i, t)| serde_json::json!({
+                "iteration": i + 1,
+                "response_preview": t,
+                "response_text": t,
+                "logprobs": [{"token": t, "logprob": -0.5,
+                              "top_logprobs": [{"token": t, "logprob": -0.5}]}],
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    #[test]
+    fn a_record_with_answers_is_a_base() {
+        let record = serde_json::json!({
+            "schema": "loken/1",
+            "results": [recorded_result("Ollama", &["a", "b"]), recorded_result("LOKEN", &["c"])],
+        });
+        let base = Base::from_record(&record, "00".into()).expect("a record with answers");
+        let cell = base
+            .cell("m", 4096, "short")
+            .expect("the first target's cell");
+        assert_eq!(cell.target, "Ollama");
+        assert_eq!(cell.texts, ["a", "b"]);
+        assert_eq!(cell.logprobs[1].as_ref().expect("held")[0].token, "b");
+        assert!(base.cell("m", 2048, "short").is_none());
+    }
+
+    /// A record written before answers were recorded still parses, and says why it is no base.
+    #[test]
+    fn an_old_record_parses_and_holds_no_answers() {
+        let old = serde_json::json!({
+            "schema": "loken/1",
+            "results": [{
+                "target": "Ollama", "model": "m", "num_ctx": 4096, "prompt": "short",
+                "quality": {"reference": true, "identical_iterations": 1, "iterations": 1,
+                            "mean_common_prefix_chars": 4.0},
+                "iterations": [{"iteration": 1, "response_preview": "once"}],
+            }],
+        });
+        let cell = base_cell(&old["results"][0]);
+        assert_eq!(cell.model, "m");
+        assert!(cell.texts.is_empty());
+        let refused = Base::from_record(&old, "00".into()).expect_err("no answers");
+        assert!(refused.contains("no answers"), "{refused}");
+        assert!(Base::from_record(&serde_json::json!({}), "00".into()).is_err());
+    }
+
+    #[test]
+    fn answers_without_log_probabilities_keep_their_texts() {
+        let result = serde_json::json!({
+            "target": "vLLM", "model": "m", "num_ctx": 4096, "prompt": "short",
+            "iterations": [{"response_text": "a", "logprobs": null}, {"response_text": "b"}],
+        });
+        let cell = base_cell(&result);
+        assert_eq!(cell.texts, ["a", "b"]);
+        assert_eq!(cell.logprobs, [None, None]);
+    }
 
     fn entry(token: &str, logprob: f64, top: &[(&str, f64)]) -> TokenLogprob {
         TokenLogprob {
