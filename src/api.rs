@@ -4,6 +4,7 @@
 //!
 //! Only the types and methods needed for generate, load and unload.
 
+use crate::quality::{TokenLogprob, TopLogprob};
 use futures::StreamExt;
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
@@ -351,6 +352,12 @@ pub struct GenerateRequest {
     /// the cell recorded a token deficit against ollama's 128.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<bool>,
+    /// Ask for the log-probability of each generated token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<bool>,
+    /// How many of the most likely tokens to return at each position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_logprobs: Option<u8>,
 }
 
 /// Ollama generate response
@@ -384,6 +391,64 @@ pub struct GenerateResponse {
     pub eval_count: Option<u64>,
     #[serde(default)]
     pub eval_duration: Option<u64>,
+    /// The tokens of this body with their log-probabilities, when the request asked for them.
+    #[serde(default)]
+    pub logprobs: Option<Vec<TokenLogprob>>,
+}
+
+/// The log-probabilities of a streamed line, read apart from its text.
+#[derive(Debug, Clone, Deserialize)]
+struct LogprobsLine {
+    #[serde(default)]
+    logprobs: Option<Vec<TokenLogprob>>,
+}
+
+/// The `logprobs` object of a `/v1/completions` choice: parallel arrays, 1 entry per token.
+/// `top_logprobs` maps each likely token to its log-probability.
+#[derive(Debug, Clone, Deserialize, Default)]
+struct CompletionLogprobs {
+    #[serde(default)]
+    tokens: Vec<String>,
+    #[serde(default)]
+    token_logprobs: Vec<Option<f64>>,
+    #[serde(default)]
+    top_logprobs: Vec<Option<std::collections::BTreeMap<String, f64>>>,
+}
+
+impl CompletionLogprobs {
+    /// The entries in the shape of OpenAI's `logprobs.content[]`.
+    ///
+    /// The alternatives are sorted from the most likely.
+    /// The entries stop at the first token whose log-probability is `null`.
+    fn entries(&self) -> Vec<TokenLogprob> {
+        self.tokens
+            .iter()
+            .zip(&self.token_logprobs)
+            .map_while(|(token, lp)| lp.map(|lp| (token, lp)))
+            .enumerate()
+            .map(|(i, (token, logprob))| {
+                let mut top: Vec<TopLogprob> = self
+                    .top_logprobs
+                    .get(i)
+                    .and_then(Option::as_ref)
+                    .map(|m| {
+                        m.iter()
+                            .map(|(t, l)| TopLogprob {
+                                token: t.clone(),
+                                logprob: *l,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                top.sort_by(|a, b| b.logprob.total_cmp(&a.logprob));
+                TokenLogprob {
+                    token: token.clone(),
+                    logprob,
+                    top_logprobs: top,
+                }
+            })
+            .collect()
+    }
 }
 
 impl GenerateResponse {
@@ -427,6 +492,10 @@ struct OpenAiCompletionRequest {
     temperature: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<serde_json::Value>,
+    /// How many of the most likely tokens to return at each position.
+    /// The field of this route carries the count and asks for the log-probabilities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    logprobs: Option<u8>,
 }
 
 /// Token accounting block returned by both stream and non-stream responses.
@@ -451,6 +520,8 @@ struct OpenAiCompletionResponse {
 struct OpenAiChoice {
     #[serde(default)]
     text: String,
+    #[serde(default)]
+    logprobs: Option<CompletionLogprobs>,
 }
 
 /// Streaming /v1/completions chunk (one per `data: {...}` SSE line). The final
@@ -468,7 +539,16 @@ struct OpenAiCompletionChunk {
 /// final NDJSON body if it sent one, how many chunks carried text, the per-token arrival
 /// times, the accumulated text, and the wall clock. Named because a six-element tuple in the
 /// most-scrutinised function in the file is not something a reader should have to decode.
-type StreamOutcome = (Option<f64>, Option<String>, u64, Vec<f64>, String, f64);
+/// The last element is the log-probabilities the lines carried, `None` when no line carried any.
+type StreamOutcome = (
+    Option<f64>,
+    Option<String>,
+    u64,
+    Vec<f64>,
+    String,
+    f64,
+    Option<Vec<TokenLogprob>>,
+);
 
 /// Metrics extracted from a single benchmark iteration
 #[derive(Debug, Clone, Default)]
@@ -521,8 +601,11 @@ pub struct IterationMetrics {
     /// is not the answer.
     pub response_preview: Option<String>,
     /// The whole answer, kept in memory to compare it with another engine's.
-    /// It is never written to a record.
+    /// A record holds it only when the run asked for log-probabilities.
     pub response_text: String,
+    /// Each token of the answer with its log-probability.
+    /// `None` when the run did not ask for them or the engine sent none.
+    pub logprobs: Option<Vec<TokenLogprob>>,
     /// Whether the WHOLE answer was a repeating pattern rather than an answer.
     ///
     /// Decided here, where the text is still complete, and carried rather than recomputed.
@@ -552,6 +635,9 @@ pub struct BenchClient {
     /// How long a request is waited on.
     /// It is also how long a silent stream is waited on.
     timeout: Duration,
+    /// How many of the most likely tokens to ask for at each position.
+    /// `None` asks for no log-probability.
+    top_logprobs: Option<u8>,
 }
 
 /// The digest of the model file `model` that a `/api/tags` body lists, matched on `name` or
@@ -592,7 +678,13 @@ impl BenchClient {
             protocol,
             num_gpu: None,
             timeout,
+            top_logprobs: None,
         }
+    }
+
+    /// Ask for the log-probability of each generated token and of the `n` most likely tokens.
+    pub fn set_top_logprobs(&mut self, n: Option<u8>) {
+        self.top_logprobs = n;
     }
 
     /// Force `num_gpu` in the Ollama options (e.g. 0 for a CPU-only bench).
@@ -1096,6 +1188,8 @@ impl BenchClient {
             thinking: None,
             // The load probe sends an empty prompt; there is nothing to wrap either way.
             raw: None,
+            logprobs: None,
+            top_logprobs: None,
         };
         self.log_request("POST", &url, &req);
 
@@ -1225,6 +1319,8 @@ impl BenchClient {
             // about an image and keep their template - stripping it there would compare
             // a different task, not a fairer one.
             raw: images.is_none().then_some(true),
+            logprobs: self.top_logprobs.map(|_| true),
+            top_logprobs: self.top_logprobs,
         };
         self.log_request("POST", &url, &req);
 
@@ -1309,6 +1405,7 @@ impl BenchClient {
             response_text: body.response.clone(),
             degenerate: Some(crate::coherence::looks_degenerate(&body.response)),
             first_token_wall_ms: None, // non-streaming has no per-token timing
+            logprobs: self.top_logprobs.and(body.logprobs),
         })
     }
 
@@ -1349,8 +1446,11 @@ impl BenchClient {
             // about an image and keep their template - stripping it there would compare
             // a different task, not a fairer one.
             raw: images.is_none().then_some(true),
+            logprobs: self.top_logprobs.map(|_| true),
+            top_logprobs: self.top_logprobs,
         };
         self.log_request("POST", &url, &req);
+        let wants_logprobs = self.top_logprobs.is_some();
 
         // Stream over a raw TcpStream line reader: it reliably captures the final
         // done line (and thus the server's eval_count/eval_duration, which drives
@@ -1367,8 +1467,15 @@ impl BenchClient {
         let silence = self.timeout;
         let body_bytes = serde_json::to_vec(&req).map_err(|e| format!("serialize: {}", e))?;
         let max_tok = max_tokens;
-        let (first_chunk_time, last_done_line, token_count, token_times_ms, text_acc, wall_ms) =
-            tokio::task::spawn_blocking(move || -> Result<StreamOutcome, String> {
+        let (
+            first_chunk_time,
+            last_done_line,
+            token_count,
+            token_times_ms,
+            text_acc,
+            wall_ms,
+            logprobs,
+        ) = tokio::task::spawn_blocking(move || -> Result<StreamOutcome, String> {
                 use std::io::{BufRead, BufReader, Write};
                 use std::net::TcpStream;
                 let start = Instant::now();
@@ -1422,6 +1529,7 @@ impl BenchClient {
                 let mut token_count: u64 = 0;
                 let mut token_times_ms: Vec<f64> = Vec::with_capacity(max_tok);
                 let mut text_acc = String::with_capacity(256);
+                let mut logprobs: Option<Vec<TokenLogprob>> = None;
                 let mut line = String::new();
                 loop {
                     line.clear();
@@ -1436,6 +1544,12 @@ impl BenchClient {
                         continue;
                     }
                     let now = start.elapsed().as_secs_f64() * 1000.0;
+                    // Any line may carry log-probabilities, the done line included.
+                    if wants_logprobs {
+                        if let Ok(LogprobsLine { logprobs: Some(lps) }) = serde_json::from_str(l) {
+                            logprobs.get_or_insert_with(Vec::new).extend(lps);
+                        }
+                    }
                     // Content first: a chunk carrying response/thinking text is a
                     // token even if that text contains `"done":true`. The terminal
                     // stats line always has an EMPTY response -> done branch.
@@ -1465,7 +1579,7 @@ impl BenchClient {
                     }
                 }
                 let wall_ms = start.elapsed().as_secs_f64() * 1000.0;
-                Ok((first_chunk_time, last_done_line, token_count, token_times_ms, text_acc, wall_ms))
+                Ok((first_chunk_time, last_done_line, token_count, token_times_ms, text_acc, wall_ms, logprobs))
             })
             .await
             .map_err(|e| format!("stream task panicked: {}", e))??;
@@ -1557,6 +1671,7 @@ impl BenchClient {
             response_text: text_acc.clone(),
             degenerate: Some(crate::coherence::looks_degenerate(&text_acc)),
             first_token_wall_ms: token_times_ms.first().copied(),
+            logprobs,
         })
     }
 
@@ -1586,6 +1701,7 @@ impl BenchClient {
             stream: false,
             temperature: 0.0,
             stream_options: None,
+            logprobs: self.top_logprobs,
         };
         self.log_request("POST", &url, &req);
 
@@ -1618,6 +1734,12 @@ impl BenchClient {
             .first()
             .map(|c| c.text.clone())
             .unwrap_or_default();
+        let logprobs = self.top_logprobs.and_then(|_| {
+            body.choices
+                .first()
+                .and_then(|c| c.logprobs.as_ref())
+                .map(CompletionLogprobs::entries)
+        });
         let usage = body.usage.unwrap_or_default();
         let completion_tokens = usage.completion_tokens.unwrap_or(0);
         if completion_tokens == 0 && text.is_empty() {
@@ -1649,6 +1771,7 @@ impl BenchClient {
             response_text: text.clone(),
             degenerate: Some(crate::coherence::looks_degenerate(&text)),
             first_token_wall_ms: None, // non-streaming has no per-token timing
+            logprobs,
         })
     }
 
@@ -1677,6 +1800,7 @@ impl BenchClient {
             stream: true,
             temperature: 0.0,
             stream_options: Some(serde_json::json!({ "include_usage": true })),
+            logprobs: self.top_logprobs,
         };
         self.log_request("POST", &url, &req);
 
@@ -1705,6 +1829,7 @@ impl BenchClient {
         let mut buffer = String::new();
         let mut token_times_ms: Vec<f64> = Vec::with_capacity(max_tokens);
         let mut text_acc = String::with_capacity(256);
+        let mut logprobs: Option<Vec<TokenLogprob>> = None;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| format!("Stream read error: {}", e))?;
@@ -1728,6 +1853,11 @@ impl BenchClient {
                 };
                 if let Some(u) = parsed.usage {
                     usage = Some(u); // final usage chunk
+                }
+                if self.top_logprobs.is_some() {
+                    if let Some(lps) = parsed.choices.first().and_then(|c| c.logprobs.as_ref()) {
+                        logprobs.get_or_insert_with(Vec::new).extend(lps.entries());
+                    }
                 }
                 let delta = parsed
                     .choices
@@ -1782,6 +1912,7 @@ impl BenchClient {
             response_text: text_acc.clone(),
             degenerate: Some(crate::coherence::looks_degenerate(&text_acc)),
             first_token_wall_ms: token_times_ms.first().copied(),
+            logprobs,
         })
     }
 }
@@ -1976,6 +2107,109 @@ mod image_tests {
             "first token at {:?} ms, after the empty line and the first pause",
             m.first_token_wall_ms
         );
+    }
+
+    /// A whole `/api/generate` body carries 1 entry per token in `logprobs`.
+    #[test]
+    fn a_whole_generate_body_gives_its_logprobs() {
+        let body: GenerateResponse = serde_json::from_str(
+            r#"{"model":"m","created_at":"2026-11-13T22:00:00Z","response":" a cat","done":true,
+            "done_reason":"length","eval_count":2,"eval_duration":1000000,
+            "logprobs":[
+              {"token":" a","logprob":-0.25,"bytes":[32,97],"top_logprobs":[
+                {"token":" a","logprob":-0.25,"bytes":[32,97]},
+                {"token":" the","logprob":-1.75,"bytes":[32,116,104,101]}]},
+              {"token":" cat","logprob":-2.0,"bytes":[32,99,97,116],"top_logprobs":[
+                {"token":" dog","logprob":-1.5,"bytes":[32,100,111,103]},
+                {"token":" cat","logprob":-2.0,"bytes":[32,99,97,116]}]}]}"#,
+        )
+        .expect("a body with log-probabilities");
+        let lps = body.logprobs.expect("the entries");
+        assert_eq!(lps.len(), 2);
+        assert_eq!(lps[1].token, " cat");
+        assert_eq!(lps[1].top_logprobs[0].token, " dog");
+        let bare: GenerateResponse =
+            serde_json::from_str(r#"{"model":"m","response":"x","done":true}"#)
+                .expect("a body without log-probabilities");
+        assert!(bare.logprobs.is_none());
+    }
+
+    /// A `/v1/completions` choice carries parallel arrays.
+    /// They become 1 entry per token, the alternatives sorted from the most likely.
+    #[test]
+    fn a_completions_choice_gives_its_logprobs() {
+        let body: OpenAiCompletionResponse = serde_json::from_str(
+            r#"{"id":"cmpl-1","object":"text_completion","created":1,"model":"m",
+            "choices":[{"index":0,"text":" a cat","finish_reason":"length",
+              "logprobs":{"text_offset":[0,2],"token_logprobs":[-0.25,-2.0],
+                "tokens":[" a"," cat"],
+                "top_logprobs":[{" the":-1.75," a":-0.25},{" cat":-2.0," dog":-1.5}]}}],
+            "usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}"#,
+        )
+        .expect("a completion with log-probabilities");
+        let lps = body.choices[0]
+            .logprobs
+            .as_ref()
+            .expect("the arrays")
+            .entries();
+        assert_eq!(lps.len(), 2);
+        assert_eq!(lps[0].token, " a");
+        assert_eq!(lps[0].logprob, -0.25);
+        assert_eq!(lps[0].top_logprobs[0].token, " a");
+        assert_eq!(lps[1].top_logprobs[0].token, " dog");
+        let cut = CompletionLogprobs {
+            tokens: vec!["a".into(), "b".into()],
+            token_logprobs: vec![Some(-1.0), None],
+            top_logprobs: vec![None, None],
+        };
+        assert_eq!(cut.entries().len(), 1, "the entries stop at a null");
+    }
+
+    /// The log-probabilities of a stream are gathered over its lines, the done line included.
+    #[tokio::test]
+    async fn a_stream_gathers_its_logprobs() {
+        let url = serve_once(
+            vec![
+                "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n\r\n",
+                "{\"model\":\"m\",\"response\":\" a\",\"done\":false,\"logprobs\":[{\"token\":\" a\",\"logprob\":-0.25,\"top_logprobs\":[{\"token\":\" a\",\"logprob\":-0.25}]}]}\n",
+                "{\"model\":\"m\",\"response\":\" cat\",\"done\":false,\"logprobs\":[{\"token\":\" cat\",\"logprob\":-2.0,\"top_logprobs\":[{\"token\":\" dog\",\"logprob\":-1.5}]}]}\n",
+                "{\"response\":\"\",\"done\":true,\"eval_count\":3,\"eval_duration\":1000000,\"logprobs\":[{\"token\":\"\",\"logprob\":-0.5,\"top_logprobs\":[]}]}\n",
+            ],
+            Duration::from_millis(10),
+            Duration::from_millis(0),
+        );
+        let mut client =
+            BenchClient::with_protocol(url, false, Protocol::Ollama, Duration::from_secs(10));
+        client.set_top_logprobs(Some(1));
+        let m = client
+            .generate_stream("m", "p", 8, None, None, None)
+            .await
+            .expect("the stream ends on its done line");
+        let lps = m.logprobs.expect("the entries");
+        let tokens: Vec<&str> = lps.iter().map(|e| e.token.as_str()).collect();
+        assert_eq!(tokens, [" a", " cat", ""]);
+        assert_eq!(m.response_text, " a cat");
+    }
+
+    /// A run that did not ask for log-probabilities keeps none, even when a line carries them.
+    #[tokio::test]
+    async fn a_stream_not_asked_keeps_no_logprobs() {
+        let url = serve_once(
+            vec![
+                "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n\r\n",
+                "{\"response\":\" a\",\"done\":false,\"logprobs\":[{\"token\":\" a\",\"logprob\":-0.25}]}\n",
+                "{\"response\":\"\",\"done\":true,\"eval_count\":1,\"eval_duration\":1000000}\n",
+            ],
+            Duration::from_millis(10),
+            Duration::from_millis(0),
+        );
+        let client =
+            BenchClient::with_protocol(url, false, Protocol::Ollama, Duration::from_secs(10));
+        let m = client
+            .generate_stream("m", "p", 8, None, None, None)
+            .await
+            .expect("the stream ends on its done line");
+        assert!(m.logprobs.is_none());
     }
 
     /// A stream that goes silent is given up after the timeout of the client.

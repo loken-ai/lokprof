@@ -24,6 +24,19 @@ Without it, every rate is tokens over the whole request, prefill included.
 | Energy of the cards | NVIDIA through NVML, AMD and discrete Intel cards through hwmon |
 | Energy of the processor | Linux only, from RAPL |
 
+## Quality
+
+A record says how far each answer departs from the answers of a reference.
+
+| Option | What it does | Standard |
+|---|---|---|
+| `--top-logprobs N` | Asks each engine for the log-probability of every token and of the N most likely ones. The record holds each answer and these figures, token by token. | The `top_logprobs` field of the [OpenAI chat completions](https://platform.openai.com/docs/api-reference/chat/create), from 0 to 20 |
+
+| Engine | Route | Fields sent |
+|---|---|---|
+| Ollama, loken | `/api/generate` | `logprobs: true`, `top_logprobs: N` |
+| vLLM | `/v1/completions` | `logprobs: N` |
+
 ## Documentation
 
 | Page | Read it to |

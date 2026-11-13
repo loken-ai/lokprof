@@ -285,6 +285,12 @@ struct Args {
     #[arg(long)]
     reference: Option<String>,
 
+    /// Ask each engine for the log-probability of every generated token and of the N most
+    /// likely tokens at its position: OpenAI's `top_logprobs`, from 0 to 20.
+    /// The record then holds each answer with its log-probabilities, token by token.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=20))]
+    top_logprobs: Option<u8>,
+
     /// Coherence-gate substring. After every cell prints, if --image and
     /// --require-substr are both set, fail any iteration whose response
     /// preview doesn't contain (case-insensitive) at least one of the
@@ -580,6 +586,7 @@ async fn main() {
                 Duration::from_secs(args.request_timeout),
             );
             c.set_num_gpu(args.num_gpu);
+            c.set_top_logprobs(args.top_logprobs);
             c
         })
         .collect();
@@ -2678,7 +2685,7 @@ fn save_json(
                         let toks = m.tokens_generated.unwrap_or(0);
                         w.to_json(toks, c.carbon_intensity)
                     });
-                    serde_json::json!({
+                    let mut iteration = serde_json::json!({
                         "iteration": i + 1,
                         "wall_clock_ms": m.wall_clock_ms,
                         "load_time_ms": m.load_time_ms,
@@ -2701,7 +2708,15 @@ fn save_json(
                         "gpu_samples": gpu,
                         "host_sample": host,
                         "energy": energy,
-                    })
+                    });
+                    // A run that asked for log-probabilities holds its answers token by token.
+                    // `logprobs` is null when the engine sent none.
+                    if args.top_logprobs.is_some() {
+                        iteration["response_text"] = m.response_text.clone().into();
+                        iteration["logprobs"] =
+                            serde_json::to_value(&m.logprobs).unwrap_or(serde_json::Value::Null);
+                    }
+                    iteration
                 })
                 .collect();
 
@@ -2785,6 +2800,8 @@ fn save_json(
             // The trace a replay sent, by the digest of its bytes: 2 records with the same
             // digest were offered the same requests. `null` outside a replay.
             "replay_trace_sha256": trace.map(|t| t.digest.as_str()),
+            // The alternatives asked for at each position. `null` when no log-probability was.
+            "top_logprobs": args.top_logprobs,
         },
         "idle_energy_baseline": idle_energy.map(|w| w.idle_json()),
         "results": results,

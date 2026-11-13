@@ -1,5 +1,36 @@
 //! How far an answer departs from a reference answer.
 
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// One generated token, its log-probability and the most likely tokens at its position.
+///
+/// The shape is an entry of OpenAI's `logprobs.content[]`.
+/// Ollama and loken send the same entries in `logprobs[]` of `/api/generate`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TokenLogprob {
+    pub token: String,
+    pub logprob: f64,
+    /// The most likely tokens at this position, as many as the request asked for.
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub top_logprobs: Vec<TopLogprob>,
+}
+
+/// One of the most likely tokens at a position.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TopLogprob {
+    pub token: String,
+    pub logprob: f64,
+}
+
+/// Reads a `null` list as an empty one.
+fn null_as_empty<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<TopLogprob>, D::Error> {
+    Ok(Option::<Vec<TopLogprob>>::deserialize(d)?.unwrap_or_default())
+}
+
 /// The departure of one answer from the reference answer of the same iteration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Departure {
@@ -67,6 +98,27 @@ mod tests {
 
     fn owned(texts: &[&str]) -> Vec<String> {
         texts.iter().map(|t| (*t).to_string()).collect()
+    }
+
+    #[test]
+    fn an_entry_reads_with_or_without_its_alternatives() {
+        let full: TokenLogprob = serde_json::from_str(
+            r#"{"token":" a","logprob":-0.5,"bytes":[32,97],
+                "top_logprobs":[{"token":" a","logprob":-0.5,"bytes":[32,97]}]}"#,
+        )
+        .expect("an entry with alternatives");
+        assert_eq!(full.top_logprobs.len(), 1);
+        let bare: TokenLogprob =
+            serde_json::from_str(r#"{"token":" a","logprob":-0.5}"#).expect("a bare entry");
+        assert!(bare.top_logprobs.is_empty());
+        let null: TokenLogprob =
+            serde_json::from_str(r#"{"token":" a","logprob":-0.5,"top_logprobs":null}"#)
+                .expect("an entry with null alternatives");
+        assert!(null.top_logprobs.is_empty());
+        assert_eq!(
+            serde_json::to_value(&bare).expect("serialise"),
+            serde_json::json!({"token": " a", "logprob": -0.5})
+        );
     }
 
     #[test]
