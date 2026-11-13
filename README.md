@@ -37,6 +37,18 @@ A record says how far each answer departs from the answers of a reference.
 | Ollama, loken | `/api/generate` | `logprobs: true`, `top_logprobs: N` |
 | vLLM | `/v1/completions` | `logprobs: N` |
 
+With `--top-logprobs`, the `quality` value of a cell holds `logprobs`: the statistics of the KL divergence run of [llama.cpp's perplexity tool](https://github.com/ggml-org/llama.cpp/tree/master/tools/perplexity), over what 2 free answers share.
+
+| Field | What it holds |
+|---|---|
+| `shared_tokens` | The tokens both answers share from the start |
+| `delta_p` | `p - p_ref` of each shared token: mean, RMS, median, minimum, maximum |
+| `mean_ln_ppl_ratio` | The mean of `ln p_ref - ln p` over the shared tokens |
+| `same_top_p` | The share of the positions with the same preceding tokens whose most likely token is the same |
+
+The engines send the top tokens only, so no KL divergence over the vocabulary is given.
+`logprobs` is `null` when an engine sends no log-probabilities, and `logprobs_reason` says why.
+
 ## Documentation
 
 | Page | Read it to |

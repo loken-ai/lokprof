@@ -386,7 +386,14 @@ struct CellResult<'a> {
 /// context and prompt.
 /// The value names that target as `reference_target`.
 /// `null` for a cell with no other target to compare with, or no reference cell.
-fn cell_quality_in(cells: &[CellResult], cell: &CellResult) -> serde_json::Value {
+///
+/// When the run asked for log-probabilities, `logprobs` holds their departure.
+/// It is `null` when no iteration pairs them, and `logprobs_reason` then says why.
+fn cell_quality_in(
+    cells: &[CellResult],
+    cell: &CellResult,
+    asked_logprobs: bool,
+) -> serde_json::Value {
     let Some(first) = cells.first() else {
         return serde_json::Value::Null;
     };
@@ -396,6 +403,9 @@ fn cell_quality_in(cells: &[CellResult], cell: &CellResult) -> serde_json::Value
             .map(|m| m.response_text.clone())
             .collect()
     };
+    let logprobs = |c: &CellResult| -> Vec<Option<Vec<quality::TokenLogprob>>> {
+        c.iterations.iter().map(|m| m.logprobs.clone()).collect()
+    };
     let same_run = |c: &&CellResult| {
         c.model == cell.model && c.num_ctx == cell.num_ctx && c.prompt_name == cell.prompt_name
     };
@@ -404,15 +414,36 @@ fn cell_quality_in(cells: &[CellResult], cell: &CellResult) -> serde_json::Value
         .iter()
         .filter(same_run)
         .find(|c| c.target.label == first.target.label);
-    match reference {
-        Some(r) if multi_target => quality::cell_quality(
-            &texts(r),
-            &texts(cell),
-            cell.target.label == first.target.label,
-            &first.target.label,
-        ),
-        _ => serde_json::Value::Null,
+    let Some(r) = reference.filter(|_| multi_target) else {
+        return serde_json::Value::Null;
+    };
+    let mut value = quality::cell_quality(
+        &texts(r),
+        &texts(cell),
+        cell.target.label == first.target.label,
+        &first.target.label,
+    );
+    if asked_logprobs && value.is_object() {
+        add_logprob_quality(
+            &mut value,
+            quality::logprob_quality(&logprobs(r), &logprobs(cell)),
+        );
     }
+    value
+}
+
+/// Adds the departure of the log-probabilities to a `quality` value.
+/// `logprobs` is `null` when there is none, and `logprobs_reason` says why.
+fn add_logprob_quality(
+    value: &mut serde_json::Value,
+    departure: Result<serde_json::Value, &'static str>,
+) {
+    let (figures, reason) = match departure {
+        Ok(v) => (v, serde_json::Value::Null),
+        Err(why) => (serde_json::Value::Null, why.into()),
+    };
+    value["logprobs"] = figures;
+    value["logprobs_reason"] = reason;
 }
 
 #[tokio::main]
@@ -2737,7 +2768,7 @@ fn save_json(
                 "load_error": c.load_error,
                 "iteration_errors": c.iteration_errors,
                 "settings": c.settings,
-                "quality": cell_quality_in(cells, c),
+                "quality": cell_quality_in(cells, c, args.top_logprobs.is_some()),
                 "stats": serde_json::Value::Object(stats_map),
                 "iterations": iterations_json,
             })
