@@ -63,6 +63,15 @@ The record names the file by the SHA-256 of its bytes.
 | Mooncake | `timestamp` | 1 word per token. Each block of 512 tokens is drawn from its hash, so requests that share hashes share a prefix. | The [Mooncake trace](https://github.com/kvcache-ai/Mooncake/tree/main/FAST25-release) that the `mooncake_trace` dataset type of [AIPerf](https://github.com/ai-dynamo/aiperf) replays |
 
 A Mooncake request asks for `output_length` tokens, and its offset is its `timestamp` minus that of the first line.
+
+A text trace is written from a recorded session in 2 steps.
+
+| Script | Reads | Writes |
+|---|---|---|
+| `scripts/genai_spans_to_session.py` | The spans of the LLM calls, with the messages of the [OpenTelemetry semantic conventions for generative AI](https://github.com/open-telemetry/semantic-conventions-genai), as JSON lines or OTLP JSON | A session log: 1 event per message, at the start of the call that sent it |
+| `scripts/session_to_trace.py` | A session log | A text trace: 1 request per call, at its offset from the first |
+
+`tests/genai_spans.jsonl` is a made-up example of the spans, and `tests/genai_trace.jsonl` the trace written from it.
 `tests/mooncake_toolagent.jsonl` holds 2 recorded agent sessions of the Mooncake tool and agent trace, see [NOTICE](NOTICE).
 
 ## Documentation

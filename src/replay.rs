@@ -461,6 +461,25 @@ mod tests {
         assert!(a[1].prompt().contains("tool: src/config.rs:12"));
     }
 
+    const SPANS: &str = include_str!("../tests/genai_trace.jsonl");
+
+    #[test]
+    fn recorded_calls_replay_at_their_start_with_a_growing_prefix() {
+        let t = Trace::parse(SPANS.as_bytes()).unwrap();
+        assert_eq!(t.format, Format::Text);
+        assert_eq!(t.sessions(), 1);
+        let offsets: Vec<f64> = t.requests.iter().map(|r| r.offset_ms).collect();
+        assert_eq!(offsets, vec![0.0, 2500.0, 30000.0]);
+        for pair in t.requests.windows(2) {
+            assert!(pair[1].prompt().starts_with(&*pair[0].prompt()));
+        }
+        // A tool call and its response are sent as text.
+        assert!(t.requests[1]
+            .prompt()
+            .contains("assistant: grep({\"pattern\": \"config\"})"));
+        assert!(t.requests[1].prompt().contains("tool: src/config.rs:12"));
+    }
+
     #[test]
     fn a_bad_trace_is_refused_with_its_line() {
         let cases = [

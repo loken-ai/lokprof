@@ -21,6 +21,7 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Records: hold how far the log-probabilities of each answer depart from the reference's.
 - Quality: compare the answers with those of a record given by --quality-base.
 - Replay: send a Mooncake trace with a prompt drawn from each block hash.
+- Replay: turn the recorded spans of LLM calls into a session log.
 
 ## [0.5.0] - 2026-11-02
 

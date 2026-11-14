@@ -1,0 +1,3 @@
+{"offset_ms": 0.0, "session": "s1", "messages": [{"role": "system", "content": "You are a coding agent in a repository."}, {"role": "user", "content": "Find where the config is read."}]}
+{"offset_ms": 2500.0, "session": "s1", "messages": [{"role": "assistant", "content": "grep({\"pattern\": \"config\"})"}, {"role": "tool", "content": "src/config.rs:12: pub fn load() -> Config"}]}
+{"offset_ms": 30000.0, "session": "s1", "messages": [{"role": "assistant", "content": "The loader is config::load in src/config.rs."}, {"role": "user", "content": "Now add a test for the loader."}]}
