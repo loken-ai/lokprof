@@ -221,7 +221,8 @@ struct Args {
     load: Option<String>,
 
     /// Replay a recorded session: a file of JSON lines, one request each, sent at the
-    /// offset it holds. The record names the file by its digest. Use `--stream` for the
+    /// offset it holds. A Mooncake trace is read too, told apart by its `timestamp`.
+    /// The record names the file by its digest. Use `--stream` for the
     /// time to first token and the time per output token.
     #[arg(long)]
     replay: Option<String>,
@@ -2264,13 +2265,14 @@ async fn run_replay_cell<'a>(
     let answers = replay::run(&trace.requests, |r| async move {
         let tokens = r.max_tokens.unwrap_or(max_tokens);
         let session = r.session.as_deref();
+        let prompt = r.prompt();
         if stream {
             client
-                .generate_stream(model, &r.prompt, tokens, Some(num_ctx), None, session)
+                .generate_stream(model, &prompt, tokens, Some(num_ctx), None, session)
                 .await
         } else {
             client
-                .generate(model, &r.prompt, tokens, Some(num_ctx), None, session)
+                .generate(model, &prompt, tokens, Some(num_ctx), None, session)
                 .await
         }
     })
@@ -2330,7 +2332,7 @@ async fn run_replay_cell<'a>(
         model_fingerprint: None,
         num_ctx,
         prompt_name: prompt_name.to_string(),
-        prompt_chars: trace.requests.iter().map(|r| r.prompt.len()).sum(),
+        prompt_chars: trace.requests.iter().map(|r| r.prompt().len()).sum(),
         gpu_samples_per_iter: vec![Vec::new(); iterations.len()],
         host_samples_per_iter: vec![None; iterations.len()],
         energy_per_iter: vec![None; iterations.len()],

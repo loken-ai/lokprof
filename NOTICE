@@ -1,0 +1,10 @@
+lokprof
+Copyright (c) 2026 The LOKEN contributors
+
+tests/mooncake_toolagent.jsonl holds 10 lines of the file
+FAST25-release/traces/toolagent_trace.jsonl of the Mooncake project,
+https://github.com/kvcache-ai/Mooncake, under the Apache License 2.0.
+A copy of that licence is in LICENSE-APACHE.
+The 10 lines are those whose hash_ids begin with [0, 111101] or [0, 118796].
+They are kept byte for byte and in their order.
+No other line of the file is included.

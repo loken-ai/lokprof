@@ -52,6 +52,19 @@ With `--top-logprobs`, the `quality` value of a cell holds `logprobs`: the stati
 The engines send the top tokens only, so no KL divergence over the vocabulary is given.
 `logprobs` is `null` when an engine sends no log-probabilities, and `logprobs_reason` says why.
 
+## Replay
+
+`--replay FILE` sends the requests of a trace at the times the trace holds.
+The record names the file by the SHA-256 of its bytes.
+
+| Format | Told apart by | Prompt sent | Standard |
+|---|---|---|---|
+| Text | `offset_ms` | The text of the line, after the earlier lines of its session | lokprof's own, as in `tests/trace.jsonl` |
+| Mooncake | `timestamp` | 1 word per token. Each block of 512 tokens is drawn from its hash, so requests that share hashes share a prefix. | The [Mooncake trace](https://github.com/kvcache-ai/Mooncake/tree/main/FAST25-release) that the `mooncake_trace` dataset type of [AIPerf](https://github.com/ai-dynamo/aiperf) replays |
+
+A Mooncake request asks for `output_length` tokens, and its offset is its `timestamp` minus that of the first line.
+`tests/mooncake_toolagent.jsonl` holds 2 recorded agent sessions of the Mooncake tool and agent trace, see [NOTICE](NOTICE).
+
 ## Documentation
 
 | Page | Read it to |
