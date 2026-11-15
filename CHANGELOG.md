@@ -5,6 +5,8 @@ and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-15
+
 ### Added
 
 - Replay: send a recorded session at its timing and name the trace by its digest.
